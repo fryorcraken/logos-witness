@@ -1,0 +1,27 @@
+# Nix
+result
+result-*
+.direnv/
+
+# Build
+build/
+*.o
+*.so
+*.dylib
+
+# LGX bundles (built artifacts)
+*.lgx
+
+# Scaffold cache / state
+.scaffold/
+
+# Editor
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
