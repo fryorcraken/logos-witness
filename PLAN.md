@@ -24,7 +24,8 @@ Carried over from `SPEC.md` §2; restated for this plan's bottom-up dependency
 ordering:
 
 - **Two-module split:** `logos_witness_core` (C++17 / Qt 6, headless) and
-  `logos_witness_ui_qml` (QML UI). Mirrors `logos-battleship`.
+  `logos_witness_ui_qml` (QML UI), per the lgx core / UI module shapes
+  documented in the basecamp journey docs.
 - **Wire format: protobuf**, single source of truth at
   `logos-witness-core/proto/reference.proto`. Generated C++ via `protoc` in
   CMake. Aligns with `lssa-idl/0.1.0` framework.

@@ -86,12 +86,12 @@ decision once the tx interface settles.
 
 ### Reference schema (protobuf)
 
-Inscribed and announced payloads are protobuf. Choice rationale: matches the
-`proto/` convention used by `logos-battleship`, aligns with the
-`lssa-idl/0.1.0` framework declared in `scaffold.toml`, and gives compile-time
-schema enforcement and cross-language tooling. proto3's "unknown fields are
-preserved on parse" gives the same forward-compatibility property that an
-extendable CBOR map would, with stricter producer guarantees.
+Inscribed and announced payloads are protobuf. Choice rationale: aligns with
+the `lssa-idl/0.1.0` framework declared in `scaffold.toml`, and gives
+compile-time schema enforcement and cross-language tooling. proto3's
+"unknown fields are preserved on parse" gives the same forward-compatibility
+property that an extendable CBOR map would, with stricter producer
+guarantees.
 
 `logos-witness-core/proto/reference.proto`:
 
@@ -163,7 +163,8 @@ logos-witness/                   # repo root, MIT OR Apache-2.0
     └── icons/
 ```
 
-The two-module split mirrors `logos-battleship/` in this same workspace.
+The two-module split follows the basecamp journey-doc pattern of a core
+(non-UI) module plus a separate UI module, communicating via `LogosAPI`.
 
 ## 4. Commands
 
