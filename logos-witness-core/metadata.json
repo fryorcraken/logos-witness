@@ -1,0 +1,23 @@
+{
+  "name": "logos_witness_core",
+  "version": "0.1.0",
+  "type": "core",
+  "category": "app",
+  "description": "Logos Witness core: photo strip + storage + delivery + on-chain reference batching",
+  "main": "logos_witness_core_plugin",
+  "dependencies": [],
+
+  "nix": {
+    "packages": {
+      "build": [],
+      "runtime": []
+    },
+    "external_libraries": [],
+    "cmake": {
+      "find_packages": [],
+      "extra_sources": [],
+      "extra_include_dirs": [],
+      "extra_link_libraries": []
+    }
+  }
+}
