@@ -1,17 +1,8 @@
-# Logos Witness — scaffold configuration.
-#
-# Mirrors the two-module pattern used by logos-battleship. Both modules are
-# built and installed by `lgs basecamp install` against the basecamp commit
-# pinned below. Bumping the basecamp pin is a SPEC §7.4 decision (use the
-# basecamp-bundled module versions, never master HEAD).
-
 [scaffold]
 version = "0.2.0"
 
 [repos.lez]
 source = "https://github.com/logos-blockchain/logos-execution-zone.git"
-# Pin matches the version known to work with the basecamp pin below.
-# Update both pins together.
 pin = "35d8df0d031315219f94d1546ceb862b0e5b208f"
 
 [repos.spel]
@@ -23,6 +14,20 @@ source = "https://github.com/logos-co/logos-basecamp"
 pin = "20a3ce3bebe435b778ef06cf91105c283f8d4356"
 build = "nix-flake"
 attr = "app"
+
+[repos.lgpm]
+source = "github:logos-co/logos-package-manager"
+pin = "e5c25989861f4487c3dc8c7b3bc0062bcbc3221f"
+build = "nix-flake"
+attr = "cli"
+
+[modules.logos_witness_core]
+flake = "path:./logos-witness-core#lgx"
+role = "project"
+
+[modules.logos_witness_ui_qml]
+flake = "path:./logos-witness-ui-qml#lgx"
+role = "project"
 
 [wallet]
 home_dir = ".scaffold/wallet"
@@ -42,11 +47,3 @@ risc0_dev_mode = true
 [basecamp]
 port_base = 60000
 port_stride = 10
-
-[modules.logos_witness_core]
-flake = "path:./logos-witness-core#lgx"
-role = "project"
-
-[modules.logos_witness_ui_qml]
-flake = "path:./logos-witness-ui-qml#lgx"
-role = "project"
