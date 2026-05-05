@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package logos.witness.v1;
+
+// Single witness reference — wire and on-chain canonical form.
+//
+// Field numbers 1–4 are reserved for the v0 schema. New fields take fresh
+// numbers and MUST be additive only; renaming or repurposing existing
+// numbers is a `schema_version` bump (see SPEC §2 / §7.3).
+message Reference {
+  uint32 schema_version = 1;  // = 1 for v0
+  bytes  content_hash   = 2;  // sha256(stripped photo bytes), 32 bytes
+  uint64 timestamp      = 3;  // unix seconds, user-confirmed
+  string geohash        = 4;  // precision 8 (~20m)
+}
+
+// Batched on-chain inscription payload (one zone-sdk inscription).
+message ReferenceBatch {
+  repeated Reference refs = 1;
+}
