@@ -25,17 +25,32 @@ Item {
 
         Text {
             Layout.alignment: Qt.AlignHCenter
-            text: "Submit / map / timeline land in Phase 3.\nCore module is the in-memory stub until Phases 4–7."
+            text: "Submit dialog is Phase 3.1 (picker + preview only).\nGeohash (3.2), timestamp confirm + submit (3.3), map/timeline (3.4) follow.\nCore module is the in-memory stub until Phases 4–7."
             horizontalAlignment: Text.AlignHCenter
             color: "#666"
             font.pixelSize: 12
         }
 
-        Button {
-            id: pingButton
+        RowLayout {
             Layout.alignment: Qt.AlignHCenter
-            text: "Ping core (listInscriptions)"
-            onClicked: pingCore()
+            spacing: 12
+
+            Button {
+                id: pingButton
+                text: "Ping core (listInscriptions)"
+                onClicked: pingCore()
+            }
+
+            Button {
+                id: submitButton
+                text: "Submit photo…"
+                onClicked: submitDialog.open()
+            }
+        }
+
+        SubmitDialog {
+            id: submitDialog
+            anchors.centerIn: parent
         }
 
         Frame {

@@ -7,22 +7,28 @@ Delivery and durably committed in batches as on-chain inscriptions via
 `zone-sdk`. Other instances of the app render contributions on a shared
 map+timeline.
 
-> **Status:** pre-alpha, Phases 1 and 2.1 of [`PLAN.md`](./PLAN.md)
+> **Status:** pre-alpha, Phases 1, 2.1, 3.1, and 3.2 of [`PLAN.md`](./PLAN.md)
 > complete. Photos-only in v0; video and live capture are deferred. See
 > [`SPEC.md`](./SPEC.md) for the authoritative design.
 
-## What works today (Phases 1 + 2.1)
+## What works today (Phases 1 + 2.1 + 3.1 + 3.2)
 
 The core module (`logos_witness_core`) builds, installs into a basecamp
 profile, and round-trips through `logoscore` against an in-memory stub
-store. The UI module (`logos_witness_ui_qml`) is a Phase 2 skeleton —
-loads in basecamp, exposes a "ping core" button that calls
-`listInscriptions` via the `logos.callModule()` bridge and renders the
-JSON result. No network, no chain, no submit flow yet — strip pipeline
-(Phase 4), Storage (5), Delivery (6) and `zone-sdk` (7) replace the
-stubs in turn; the submit dialog and map+timeline land in Phase 3. The
-`Q_INVOKABLE` interface surface is locked so later phases can swap
-implementations without disturbing callers.
+store. The UI module (`logos_witness_ui_qml`) loads in basecamp and
+exposes two buttons: "ping core" calls `listInscriptions` via the
+`logos.callModule()` bridge and renders the JSON result; "Submit photo…"
+opens a modal dialog with a Photo tab (JPEG picker + preview) and a
+Location tab (OSM map capped at zoom 9 — regional view, no street
+detail; click drops a pin and shows the precision-8 geohash plus
+six-decimal lat/lon, both with Copy buttons so you can paste into
+another app to verify). The dialog is Cancel-only today — submit
+wire-up to the core lands in Phase 3.3 once the timestamp confirm UI
+is in place. No network photo flow yet: strip pipeline (Phase 4),
+Storage (5), Delivery (6) and `zone-sdk` (7) replace the stubs in turn;
+map+timeline of received refs land in 3.4. The `Q_INVOKABLE` interface
+surface is locked so later phases can swap implementations without
+disturbing callers.
 
 | Concern                  | Today                                 | After Phase…                |
 | ------------------------ | ------------------------------------- | --------------------------- |
@@ -30,7 +36,7 @@ implementations without disturbing callers.
 | Photo storage            | nothing stored, just a hash           | Phase 5 (Logos Storage)     |
 | Cross-instance discovery | none — single process only            | Phase 6 (Delivery pub/sub)  |
 | On-chain inscription     | `flushBatch` is a no-op stub          | Phase 7 (zone-sdk)          |
-| User interface           | placeholder window + ping-core button | Phase 3 (submit + map view) |
+| User interface           | submit dialog with photo picker + OSM-backed geohash drop-pin (z≤9) | Phase 3.3–3.5 (timestamp confirm, submit wire-up, map+timeline) |
 
 ## Architecture at a glance
 
@@ -151,6 +157,21 @@ upload. There is no `--keep-metadata` flag. The Phase 1 stub does not
 strip — it only hashes — so the in-memory `content_hash` reflects raw
 bytes for now and will change shape once strip lands.
 
+### Map tiles: a known v0 compromise
+
+The submission pipeline is the part that's anonymity-shaped: stripped
+bytes, hash-only references, no signer on chain, network-layer anonymity
+via Logos Core. The **map browse** is not. v0 fetches tiles from
+`tile.openstreetmap.org` (the SPEC §7.10 carve-out), which means every
+pan and zoom is an HTTP request to OSMF logged with your IP and the
+viewed region. Zoom is capped at level 9 — no street-name detail — to
+narrow the leakage, but a determined observer of OSMF logs can still
+correlate "this IP looked at this region around this time". If you are
+in an adversarial network context, route the app through Tor or a
+trusted VPN. The long-term fix is to distribute tiles over Logos Storage
+so map traffic is indistinguishable from normal app traffic; that is
+tracked as a separate prototype project, not v0 scope.
+
 See [`SPEC.md` §7 Boundaries](./SPEC.md#7-boundaries) for the full set of
 non-negotiable rules. **This README is part of the contract** — any change
 to install, build, run, or interaction surface MUST update this file in
@@ -177,7 +198,9 @@ logos-witness/
 └── logos-witness-ui-qml/      # UI LGX module (QML)
     ├── flake.nix              # pinned to logos-module-builder/tutorial-v1
     ├── metadata.json
-    └── Main.qml               # Phase 2 skeleton: ping-core button
+    ├── Main.qml               # ping-core + open-submit-dialog buttons
+    ├── SubmitDialog.qml       # tabbed: photo picker (3.1) + map (3.2)
+    ├── MapView.qml            # OSM map (z≤9), click → geohash-8 pin
 ```
 
 ## License

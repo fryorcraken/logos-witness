@@ -87,6 +87,19 @@ jobs:
         working-directory: logos-witness-ui-qml
         run: nix build '.#lgx' --print-build-logs
 
+      - name: Verify all QML files are bundled
+        working-directory: logos-witness-ui-qml
+        run: |
+          set -eu
+          # Catch the failure mode where a new top-level *.qml is added but
+          # not git-tracked: the flake `src = ./.;` then silently drops it
+          # and basecamp loads a UI without the new component.
+          tracked=$(git ls-files '*.qml' | xargs -n1 basename | sort)
+          bundled=$(tar tf result/*.lgx | grep -E '\.qml$' | xargs -n1 basename | sort -u)
+          echo "Tracked QML: $tracked"
+          echo "Bundled QML: $bundled"
+          diff <(echo "$tracked") <(echo "$bundled")
+
       - name: Build lm inspection tool
         working-directory: logos-witness-core
         run: nix build 'github:logos-co/logos-module/tutorial-v1#lm' --out-link lm-tool --print-build-logs

@@ -365,11 +365,19 @@ require an explicit SPEC amendment.
 
 ### Never
 
-10. **Never call third-party network APIs.** No external map tile servers,
-    telemetry, error reporters, analytics, font CDNs, or "just this once"
-    fetches. All assets and tiles are bundled or self-hosted. The only
-    network operations the app performs go through Logos Core (Delivery,
-    Storage, chain).
+10. **Never call third-party network APIs**, with one explicit, temporary
+    carve-out for v0: OSM tile servers (`tile.openstreetmap.org`) are the
+    sole permitted external data source, capped at zoom level 9 (regional,
+    no street-name detail), used only by the in-app map view. The carve-out
+    is deliberate — shipping a demo-able UI before tile-distribution
+    infrastructure exists — and is scheduled for removal before public-scale
+    deployment per OSMF's tile usage policy. Long-term, map tiles migrate to
+    distribution over Logos Storage as a separate prototype project (see
+    §10). All other external assets remain forbidden: no Mapbox/Carto/Google
+    tile traffic, no telemetry, no error reporters, no analytics, no font
+    CDNs, no "just this once" fetches. All non-tile assets are bundled or
+    self-hosted. Aside from OSM tiles, the only network operations the app
+    performs go through Logos Core (Delivery, Storage, chain).
 11. **Never publish unstripped bytes**, even in dev/debug paths. There is no
     `--keep-metadata` flag.
 12. **Never inscribe a per-contributor identifier on chain.** No signer
@@ -453,10 +461,13 @@ the tagged commit, including the docs gate.
   Default: greyed marker, click reveals "blob unreachable" detail.
 - `zone-sdk` inscribe API shape (sync vs. async, signing requirement, byte
   cap per inscription) — confirms the manual-flush UX before any code lands.
-- Geohash selector UX: drop-pin on a map tile vs. text entry. Default:
-  drop-pin, with tile precision visible.
-- Map tile source for offline-first compliance with §7.10 — bundled MBTiles
-  or rasterised at build time.
+- Geohash selector UX: drop-pin on a map tile vs. text entry. **Decided
+  (Phase 3.2):** drop-pin on an OSM-backed map capped at zoom level 9, with
+  the resulting geohash-8 and lat/lon both shown and copy-able from the pin
+  readout so users can verify in another app.
+- Map tile source long-term — v0 uses OSM with the §7.10 carve-out; the
+  target end-state is tile distribution over Logos Storage, prototyped as
+  a separate project. Open: when does Witness depend on it (v0.x, v1)?
 - Exact "user-facing surface" globs used by the README docs gate (§9.7) —
   conservative default above is fine for v0 but may need pruning to avoid
   false positives on internal-only refactors.

@@ -1,0 +1,173 @@
+import QtQuick 2.15
+import QtQuick.Controls 2.15
+import QtQuick.Layouts 1.15
+import QtLocation 6.5
+import QtPositioning 6.5
+
+// Phase 3.2: OSM tile map, capped at z=9 (regional, no street detail).
+// SPEC §7.10: OSM is the sole permitted external data source for v0;
+// migrates to Logos-Storage-distributed tiles in a separate prototype.
+//
+// Click drops a pin and emits `pinned(geohash, lat, lon)`. Geohash is
+// always precision-8 per SPEC §2, computed from the click pixel — note
+// the visible map at z≤9 is far coarser than 20 m, so the geohash carries
+// more precision than the user could actually see. That's intentional:
+// the user is choosing what zoom they trust, the wire format is fixed.
+
+Item {
+    id: root
+
+    // Hard caps. z=9 keeps street names off the standard OSM Mapnik style.
+    readonly property int minZoomLevel: 2
+    readonly property int maxZoomLevel: 9
+
+    property string pinGeohash: ""
+    property real   pinLatitude: 0.0
+    property real   pinLongitude: 0.0
+    property bool   hasPin: false
+
+    signal pinned(string geohash, real latitude, real longitude)
+
+    // Standard Niemeyer-2008 geohash. SPEC §2 fixes precision at 8.
+    // Inlined rather than imported as a .js library because the lgx UI
+    // builder only globs `*.qml` files into the bundle (see flake of
+    // logos-module-builder/lib/mkLogosQmlModule.nix).
+    readonly property string _geohashAlphabet: "0123456789bcdefghjkmnpqrstuvwxyz"
+    function _encodeGeohash(lat, lon, precision) {
+        var latRange = [-90.0, 90.0]
+        var lonRange = [-180.0, 180.0]
+        var bits = []
+        var even = true
+        while (bits.length < precision * 5) {
+            var range = even ? lonRange : latRange
+            var v = even ? lon : lat
+            var mid = (range[0] + range[1]) / 2
+            if (v >= mid) { bits.push(1); range[0] = mid }
+            else          { bits.push(0); range[1] = mid }
+            even = !even
+        }
+        var out = ""
+        for (var i = 0; i < bits.length; i += 5) {
+            var idx = bits[i]*16 + bits[i+1]*8 + bits[i+2]*4 + bits[i+3]*2 + bits[i+4]
+            out += root._geohashAlphabet.charAt(idx)
+        }
+        return out
+    }
+
+    Plugin {
+        id: osmPlugin
+        name: "osm"
+        // OSMF tile usage policy asks for an identifying User-Agent and forbids
+        // the default Nominatim/tile endpoints for production traffic. Pre-alpha
+        // demo traffic only; v0.x migrates off OSM (SPEC §7.10).
+        PluginParameter { name: "osm.useragent"; value: "logos-witness/0.1.0" }
+    }
+
+    Map {
+        id: map
+        anchors.fill: parent
+        plugin: osmPlugin
+        center: QtPositioning.coordinate(20.0, 0.0)
+        zoomLevel: 3
+        minimumZoomLevel: root.minZoomLevel
+        maximumZoomLevel: root.maxZoomLevel
+        copyrightsVisible: true
+
+        MapQuickItem {
+            id: pinMarker
+            visible: root.hasPin
+            anchorPoint.x: pinIcon.width / 2
+            anchorPoint.y: pinIcon.height
+            coordinate: QtPositioning.coordinate(root.pinLatitude, root.pinLongitude)
+            sourceItem: Rectangle {
+                id: pinIcon
+                width: 14
+                height: 14
+                radius: 7
+                color: "#d62828"
+                border.color: "white"
+                border.width: 2
+            }
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.LeftButton
+            onClicked: function (mouse) {
+                var coord = map.toCoordinate(Qt.point(mouse.x, mouse.y))
+                if (!coord.isValid) return
+                root.pinLatitude  = coord.latitude
+                root.pinLongitude = coord.longitude
+                root.pinGeohash   = root._encodeGeohash(coord.latitude, coord.longitude, 8)
+                root.hasPin       = true
+                root.pinned(root.pinGeohash, coord.latitude, coord.longitude)
+            }
+        }
+    }
+
+    // Pin readout: geohash + lat/lon with copy-to-clipboard, so users can
+    // paste into another app to verify. Fixed precision per SPEC §2.
+    Frame {
+        visible: root.hasPin
+        anchors.left: parent.left
+        anchors.bottom: parent.bottom
+        anchors.margins: 8
+        padding: 8
+        background: Rectangle {
+            color: "#f6f6f6"
+            border.color: "#ccc"
+            radius: 4
+            opacity: 0.95
+        }
+
+        ColumnLayout {
+            spacing: 4
+
+            RowLayout {
+                spacing: 8
+                Label {
+                    text: "geohash-8: " + root.pinGeohash
+                    font.family: "monospace"
+                    font.pixelSize: 11
+                }
+                Button {
+                    text: "Copy"
+                    font.pixelSize: 10
+                    padding: 2
+                    onClicked: copyHelper.copyText(root.pinGeohash)
+                }
+            }
+
+            RowLayout {
+                spacing: 8
+                Label {
+                    text: "lat,lon: " + root.pinLatitude.toFixed(6)
+                          + ", " + root.pinLongitude.toFixed(6)
+                    font.family: "monospace"
+                    font.pixelSize: 11
+                }
+                Button {
+                    text: "Copy"
+                    font.pixelSize: 10
+                    padding: 2
+                    onClicked: copyHelper.copyText(
+                        root.pinLatitude.toFixed(6) + "," + root.pinLongitude.toFixed(6))
+                }
+            }
+        }
+    }
+
+    // QML's clipboard story is fragmented across versions — TextEdit's
+    // selectAll + built-in copy() is the portable trick that doesn't need
+    // a C++ shim. The wrapper has a different name to avoid shadowing.
+    TextEdit {
+        id: copyHelper
+        visible: false
+        function copyText(s) {
+            text = s
+            selectAll()
+            copy()  // TextEdit.copy() — the built-in.
+            deselect()
+        }
+    }
+}
