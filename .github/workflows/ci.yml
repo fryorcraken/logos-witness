@@ -83,6 +83,10 @@ jobs:
         working-directory: logos-witness-core
         run: nix build '.#lib' --out-link result-lib --print-build-logs
 
+      - name: Build UI module .#lgx
+        working-directory: logos-witness-ui-qml
+        run: nix build '.#lgx' --print-build-logs
+
       - name: Build lm inspection tool
         working-directory: logos-witness-core
         run: nix build 'github:logos-co/logos-module/tutorial-v1#lm' --out-link lm-tool --print-build-logs

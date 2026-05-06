@@ -7,27 +7,30 @@ Delivery and durably committed in batches as on-chain inscriptions via
 `zone-sdk`. Other instances of the app render contributions on a shared
 map+timeline.
 
-> **Status:** pre-alpha, Phase 1 of [`PLAN.md`](./PLAN.md) complete.
-> Photos-only in v0; video and live capture are deferred. See
+> **Status:** pre-alpha, Phases 1 and 2.1 of [`PLAN.md`](./PLAN.md)
+> complete. Photos-only in v0; video and live capture are deferred. See
 > [`SPEC.md`](./SPEC.md) for the authoritative design.
 
-## What works today (Phase 1)
+## What works today (Phases 1 + 2.1)
 
 The core module (`logos_witness_core`) builds, installs into a basecamp
 profile, and round-trips through `logoscore` against an in-memory stub
-store. No network, no chain, no UI yet — strip pipeline (Phase 4),
-Storage (5), Delivery (6) and `zone-sdk` (7) replace the stubs in turn,
-and the QML UI module lands in Phase 2. The `Q_INVOKABLE` interface
-surface is locked so later phases can swap implementations without
-disturbing callers.
+store. The UI module (`logos_witness_ui_qml`) is a Phase 2 skeleton —
+loads in basecamp, exposes a "ping core" button that calls
+`listInscriptions` via the `logos.callModule()` bridge and renders the
+JSON result. No network, no chain, no submit flow yet — strip pipeline
+(Phase 4), Storage (5), Delivery (6) and `zone-sdk` (7) replace the
+stubs in turn; the submit dialog and map+timeline land in Phase 3. The
+`Q_INVOKABLE` interface surface is locked so later phases can swap
+implementations without disturbing callers.
 
-| Concern                  | Today (Phase 1)                       | After Phase…                |
+| Concern                  | Today                                 | After Phase…                |
 | ------------------------ | ------------------------------------- | --------------------------- |
 | EXIF / metadata strip    | none — sha256 of raw bytes            | Phase 4                     |
 | Photo storage            | nothing stored, just a hash           | Phase 5 (Logos Storage)     |
 | Cross-instance discovery | none — single process only            | Phase 6 (Delivery pub/sub)  |
 | On-chain inscription     | `flushBatch` is a no-op stub          | Phase 7 (zone-sdk)          |
-| User interface           | none — `logoscore` CLI only           | Phase 2 (QML UI module)     |
+| User interface           | placeholder window + ping-core button | Phase 3 (submit + map view) |
 
 ## Architecture at a glance
 
@@ -36,7 +39,7 @@ Two LGX modules, both built with Nix and installed into `logos-basecamp`:
 | Module                 | Type | Role                                                             |
 | ---------------------- | ---- | ---------------------------------------------------------------- |
 | `logos_witness_core`   | core | EXIF strip, Storage upload, Delivery pub/sub, batch inscriber    |
-| `logos_witness_ui_qml` | UI   | File picker, geohash-on-map selector, submit, map+timeline view (Phase 2) |
+| `logos_witness_ui_qml` | UI   | File picker, geohash-on-map selector, submit, map+timeline view (skeleton today, full UI in Phase 3) |
 
 The single global Delivery topic will be `/logos-witness/1/inscriptions/proto`.
 Each on-chain reference is a protobuf `Reference` message —
@@ -53,9 +56,9 @@ precision-8 geohash. See `logos-witness-core/proto/reference.proto`.
 
 ## Quickstart
 
-Build and install the core module into the seeded `alice` basecamp profile,
-then drive it from `logoscore`. (UI flow lands in Phase 2; for now this
-demonstrates the full Q_INVOKABLE surface against the in-memory stub.)
+Build and install both modules into the seeded `alice` basecamp profile.
+The CLI flow drives the core module via `logoscore`; the UI flow needs
+basecamp launched (manual eyeball today, full submit + map land in Phase 3).
 
 ```bash
 git clone https://github.com/fryorcraken/logos-witness.git
@@ -64,14 +67,16 @@ cd logos-witness
 # 1. Resolve and build basecamp + lgpm + alice/bob profiles.
 lgs basecamp setup
 
-# 2. Build the core module.
-cd logos-witness-core
-nix build '.#lgx'
+# 2. Build both modules.
+( cd logos-witness-core   && nix build '.#lgx' )
+( cd logos-witness-ui-qml && nix build '.#lgx' )
 
 # 3. Install into the alice profile.
-LGPM=/home/$USER/.cache/logos-scaffold/basecamp/$(grep -oP 'pin = "\K[^"]+' ../scaffold.toml | head -1)/lgpm-result/bin/lgpm
-ALICE=$PWD/../.scaffold/basecamp/profiles/alice/xdg-data/Logos/LogosBasecampDev
-$LGPM --modules-dir "$ALICE/modules" install --file result/logos-logos_witness_core-module-lib.lgx
+BASECAMP_PIN=$(grep -oP '(?<=^pin = ")[^"]+' scaffold.toml | head -1)
+LGPM=$HOME/.cache/logos-scaffold/basecamp/$BASECAMP_PIN/lgpm-result/bin/lgpm
+ALICE=$PWD/.scaffold/basecamp/profiles/alice/xdg-data/Logos/LogosBasecampDev
+$LGPM --modules-dir    "$ALICE/modules"     install --file logos-witness-core/result/logos-logos_witness_core-module-lib.lgx
+$LGPM --ui-plugins-dir "$ALICE/ui-plugins"  install --file logos-witness-ui-qml/result/logos-logos_witness_ui_qml-lib.lgx
 ```
 
 Then start `logoscore` and exercise the round-trip:
@@ -161,17 +166,19 @@ logos-witness/
 ├── LICENSE-MIT
 ├── LICENSE-APACHE
 ├── scaffold.toml              # basecamp pin + module registry
-└── logos-witness-core/        # core LGX module (C++17 / Qt 6)
-    ├── CMakeLists.txt
+├── logos-witness-core/        # core LGX module (C++17 / Qt 6)
+│   ├── CMakeLists.txt
+│   ├── flake.nix              # pinned to logos-module-builder/tutorial-v1
+│   ├── metadata.json
+│   ├── proto/reference.proto  # wire / on-chain schema
+│   ├── src/                   # interface + plugin + initLogos
+│   ├── lib/                   # InMemoryStore (stub backend, Phase 1)
+│   └── tests/                 # protobuf round-trip
+└── logos-witness-ui-qml/      # UI LGX module (QML)
     ├── flake.nix              # pinned to logos-module-builder/tutorial-v1
     ├── metadata.json
-    ├── proto/reference.proto  # wire / on-chain schema
-    ├── src/                   # interface + plugin + initLogos
-    ├── lib/                   # InMemoryStore (stub backend, Phase 1)
-    └── tests/                 # protobuf round-trip
+    └── Main.qml               # Phase 2 skeleton: ping-core button
 ```
-
-`logos-witness-ui-qml/` joins the tree at Phase 2.
 
 ## License
 
