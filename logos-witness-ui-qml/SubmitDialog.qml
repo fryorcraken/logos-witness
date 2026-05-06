@@ -264,6 +264,12 @@ Dialog {
         }
     }
 
+    // capturedAt default needs to be "the moment the dialog opened", not
+    // component-construction time — this Dialog is instantiated once in
+    // Main.qml and reused, so without this hook a user who sat on an open
+    // dialog for ten minutes would silently submit the app-launch time.
+    onAboutToShow: capturedAt = new Date()
+
     onAccepted: _resetState()
     onRejected: _resetState()
     function _resetState() {
