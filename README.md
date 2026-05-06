@@ -7,28 +7,29 @@ Delivery and durably committed in batches as on-chain inscriptions via
 `zone-sdk`. Other instances of the app render contributions on a shared
 map+timeline.
 
-> **Status:** pre-alpha, Phases 1, 2.1, 3.1, and 3.2 of [`PLAN.md`](./PLAN.md)
-> complete. Photos-only in v0; video and live capture are deferred. See
-> [`SPEC.md`](./SPEC.md) for the authoritative design.
+> **Status:** pre-alpha, Phases 1, 2.1, 3.1, 3.2, and 3.3 of
+> [`PLAN.md`](./PLAN.md) complete. Photos-only in v0; video and live
+> capture are deferred. See [`SPEC.md`](./SPEC.md) for the authoritative
+> design.
 
-## What works today (Phases 1 + 2.1 + 3.1 + 3.2)
+## What works today (Phases 1 + 2.1 + 3.1 + 3.2 + 3.3)
 
 The core module (`logos_witness_core`) builds, installs into a basecamp
 profile, and round-trips through `logoscore` against an in-memory stub
 store. The UI module (`logos_witness_ui_qml`) loads in basecamp and
 exposes two buttons: "ping core" calls `listInscriptions` via the
 `logos.callModule()` bridge and renders the JSON result; "Submit photo…"
-opens a modal dialog with a Photo tab (JPEG picker + preview) and a
-Location tab (OSM map capped at zoom 9 — regional view, no street
-detail; click drops a pin and shows the precision-8 geohash plus
-six-decimal lat/lon, both with Copy buttons so you can paste into
-another app to verify). The dialog is Cancel-only today — submit
-wire-up to the core lands in Phase 3.3 once the timestamp confirm UI
-is in place. No network photo flow yet: strip pipeline (Phase 4),
-Storage (5), Delivery (6) and `zone-sdk` (7) replace the stubs in turn;
-map+timeline of received refs land in 3.4. The `Q_INVOKABLE` interface
-surface is locked so later phases can swap implementations without
-disturbing callers.
+opens a modal dialog with three tabs — Photo (JPEG picker + preview),
+Location (OSM map capped at zoom 9; click drops a precision-8 geohash
+pin with copy-able lat/lon), and When (defaults to now, editable to
+backdate). Submit stays disabled until all three inputs are set, then
+calls `submitPhoto(filePath, unixSecondsString, geohash8)` against the
+in-memory stub core via `logos.callModule()`; the dialog closes on
+success. No network photo flow yet: strip pipeline (Phase 4), Storage
+(5), Delivery (6) and `zone-sdk` (7) replace the stubs in turn; the
+post-submit map+timeline of received refs lands in 3.4. The
+`Q_INVOKABLE` interface surface is locked so later phases can swap
+implementations without disturbing callers.
 
 | Concern                  | Today                                 | After Phase…                |
 | ------------------------ | ------------------------------------- | --------------------------- |
@@ -36,7 +37,7 @@ disturbing callers.
 | Photo storage            | nothing stored, just a hash           | Phase 5 (Logos Storage)     |
 | Cross-instance discovery | none — single process only            | Phase 6 (Delivery pub/sub)  |
 | On-chain inscription     | `flushBatch` is a no-op stub          | Phase 7 (zone-sdk)          |
-| User interface           | submit dialog with photo picker + OSM-backed geohash drop-pin (z≤9) | Phase 3.3–3.5 (timestamp confirm, submit wire-up, map+timeline) |
+| User interface           | full submit flow against stub core (photo + geohash + time → submitPhoto) | Phase 3.4–3.5 (post-submit map + timeline scrubber) |
 
 ## Architecture at a glance
 
@@ -136,6 +137,15 @@ nix develop --command bash -c '
   cmake -B build -GNinja \
     && cmake --build build --target test_reference_codec \
     && ctest --test-dir build --output-on-failure'
+
+# UI helper unit tests — timestamp formatting, submit-args marshalling
+# (Phase 3.3). Exercises SubmitHelpers.js, the canonical version of the
+# arg-marshalling logic that SubmitDialog.qml inlines. Runs offscreen.
+cd ../logos-witness-ui-qml
+nix-shell -p qt6.qtdeclarative qt6.qtbase --run '
+  export QML2_IMPORT_PATH=$(dirname $(find /nix/store -path "*qtdeclarative*/qml/QtTest/qmldir" 2>/dev/null | head -1))/..
+  export QT_QPA_PLATFORM=offscreen
+  qmltestrunner -input tests/'
 ```
 
 The strip-pipeline residual-metadata gate (`exiftool -a` on stripped
@@ -199,8 +209,10 @@ logos-witness/
     ├── flake.nix              # pinned to logos-module-builder/tutorial-v1
     ├── metadata.json
     ├── Main.qml               # ping-core + open-submit-dialog buttons
-    ├── SubmitDialog.qml       # tabbed: photo picker (3.1) + map (3.2)
+    ├── SubmitDialog.qml       # photo (3.1) + map (3.2) + when + submit (3.3)
     ├── MapView.qml            # OSM map (z≤9), click → geohash-8 pin
+    ├── SubmitHelpers.js       # unit-tested arg/timestamp helpers
+    └── tests/                 # qmltestrunner unit tests
 ```
 
 ## License

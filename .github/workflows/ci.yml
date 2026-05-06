@@ -93,12 +93,23 @@ jobs:
           set -eu
           # Catch the failure mode where a new top-level *.qml is added but
           # not git-tracked: the flake `src = ./.;` then silently drops it
-          # and basecamp loads a UI without the new component.
-          tracked=$(git ls-files '*.qml' | xargs -n1 basename | sort)
+          # and basecamp loads a UI without the new component. The lgx
+          # builder uses `find -maxdepth 1`, so only top-level *.qml files
+          # are bundled — exclude subdirs (tests/, etc.) which are
+          # legitimately tracked but not meant for the bundle.
+          tracked=$(git ls-files '*.qml' | grep -v '/' | sort)
           bundled=$(tar tf result/*.lgx | grep -E '\.qml$' | xargs -n1 basename | sort -u)
           echo "Tracked QML: $tracked"
           echo "Bundled QML: $bundled"
           diff <(echo "$tracked") <(echo "$bundled")
+
+      - name: qmltest — UI helper unit tests (Phase 3.3+)
+        working-directory: logos-witness-ui-qml
+        run: |
+          nix-shell -p qt6.qtdeclarative qt6.qtbase --run '
+            export QML2_IMPORT_PATH=$(dirname $(find /nix/store -path "*qtdeclarative*/qml/QtTest/qmldir" 2>/dev/null | head -1))/..
+            export QT_QPA_PLATFORM=offscreen
+            qmltestrunner -input tests/'
 
       - name: Build lm inspection tool
         working-directory: logos-witness-core
