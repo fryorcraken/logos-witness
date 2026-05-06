@@ -40,10 +40,13 @@ logos_module(
         src/logos_witness_core_interface.h
         src/logos_witness_core_plugin.h
         src/logos_witness_core_plugin.cpp
+        lib/in_memory_store.h
+        lib/in_memory_store.cpp
         ${PROTO_SRC}
         ${PROTO_HDR}
     INCLUDE_DIRS
         ${PROTO_GEN_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/lib
     LINK_LIBRARIES
         PkgConfig::PROTOBUF
 )

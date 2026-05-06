@@ -158,11 +158,16 @@ test; passes.
 **Description:** Declare the full `Q_INVOKABLE virtual` surface and
 implement it against a process-local `InMemoryStore`:
 
-- `QVariantMap submitPhoto(QString filePath, qint64 timestamp, QString geohash)`
+- `QVariantMap submitPhoto(QString filePath, QString timestamp, QString geohash)`
   → reads the file, computes sha256, builds a `Reference`, stores in memory,
-  emits `referenceObserved`.
-- `QVariantList listInscriptions(QVariantMap filter)` → returns all stored
-  Refs (filter ignored in stub).
+  emits `referenceObserved`. `timestamp` is a decimal-string of unix
+  seconds: `logoscore` and the LogosAPI marshalling both forward numeric
+  args as `QString`, so a `qint64` slot fails the QMetaObject invocation
+  with "method not invokable".
+- `QVariantList listInscriptions(QVariantMap filter)` and zero-arg
+  `QVariantList listInscriptions()` → returns all stored Refs (filter
+  ignored in stub). The zero-arg overload exists because CLI/JS callers
+  cannot easily construct a wire-side QVariantMap.
 - `QVariantMap flushBatch()` → no-op in stub, returns `{ "ok": true,
   "flushed": <N> }`.
 - `void subscribeFeed()` (signals carry events).
