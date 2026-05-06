@@ -106,10 +106,17 @@ jobs:
       - name: qmltest — UI helper unit tests (Phase 3.3+)
         working-directory: logos-witness-ui-qml
         run: |
-          nix-shell -p qt6.qtdeclarative qt6.qtbase --run '
-            export QML2_IMPORT_PATH=$(dirname $(find /nix/store -path "*qtdeclarative*/qml/QtTest/qmldir" 2>/dev/null | head -1))/..
-            export QT_QPA_PLATFORM=offscreen
-            qmltestrunner -input tests/'
+          # Use `nix shell nixpkgs#…` (flake form) rather than `nix-shell -p`
+          # so we don't depend on $NIX_PATH containing <nixpkgs> — the GHA
+          # nix-action only installs flake support, not channels.
+          # QML2_IMPORT_PATH is derived from qtdeclarative's qml/ dir so the
+          # QtTest module is discoverable; resolved at run time via $(nix
+          # eval) for a single deterministic store path (no `find` glob).
+          QTDECL=$(nix eval --raw nixpkgs#qt6.qtdeclarative)
+          export QML2_IMPORT_PATH="$QTDECL/lib/qt-6/qml"
+          export QT_QPA_PLATFORM=offscreen
+          nix shell nixpkgs#qt6.qtdeclarative nixpkgs#qt6.qtbase \
+            --command qmltestrunner -input tests/
 
       - name: Build lm inspection tool
         working-directory: logos-witness-core
