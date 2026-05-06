@@ -1,0 +1,104 @@
+# Phase-1 CI canary. Catches regressions in:
+#   - core module nix build (.#lgx and .#lib)
+#   - exposed Q_INVOKABLE surface (lm metadata + methods sanity)
+#   - protobuf wire schema round-trip (ctest)
+#   - README staying current with user-facing surface changes (SPEC §7.5)
+#
+# Phases that haven't shipped yet add their own gates as they land:
+#   - Phase 4: exiftool residual-metadata gate over strip pipeline outputs
+#   - Phase 5+: lgpm install + logoscore round-trip (needs alice/bob profiles)
+#   - Phase 9: full SPEC §9 pipeline (release artefacts via lgs build-portable)
+#
+# This canary intentionally does NOT run `lgs basecamp setup` yet — that
+# build chain (basecamp + spel + lgpm) is multi-minute and adds nothing to
+# the regression signal until there's a backend integration to exercise.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs-gate:
+    name: README docs gate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require README update when user-facing surface changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -eu
+          changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          echo "Changed files:"; printf '  %s\n' $changed
+
+          surface_touched=false
+          readme_touched=false
+
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              README.md)              readme_touched=true ;;
+              scaffold.toml|*/metadata.json|*_interface.h|logos-witness-core/proto/*|*/flake.nix|*/CMakeLists.txt)
+                                       surface_touched=true ;;
+            esac
+          done <<EOF
+          $changed
+          EOF
+
+          if $surface_touched && ! $readme_touched; then
+            echo "::error::User-facing surface changed (scaffold.toml / metadata.json / *_interface.h / proto/ / flake.nix / CMakeLists.txt) but README.md was not updated. See SPEC §7.5 — README is part of the contract; \"docs in a follow-up PR\" is not acceptable."
+            exit 1
+          fi
+          echo "OK"
+
+  build:
+    name: Build + test (Linux x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Build core module .#lgx
+        working-directory: logos-witness-core
+        run: nix build '.#lgx' --print-build-logs
+
+      - name: Build core module .#lib
+        working-directory: logos-witness-core
+        run: nix build '.#lib' --out-link result-lib --print-build-logs
+
+      - name: Build lm inspection tool
+        working-directory: logos-witness-core
+        run: nix build 'github:logos-co/logos-module/tutorial-v1#lm' --out-link lm-tool --print-build-logs
+
+      - name: Inspect plugin metadata
+        working-directory: logos-witness-core
+        run: ./lm-tool/bin/lm metadata result-lib/lib/logos_witness_core_plugin.so
+
+      - name: Inspect plugin methods (locked Q_INVOKABLE surface)
+        working-directory: logos-witness-core
+        run: ./lm-tool/bin/lm methods result-lib/lib/logos_witness_core_plugin.so
+
+      - name: ctest — protobuf reference codec round-trip
+        working-directory: logos-witness-core
+        run: |
+          nix develop --command bash -c '
+            cmake -B build -GNinja \
+              && cmake --build build --target test_reference_codec \
+              && ctest --test-dir build --output-on-failure'
