@@ -166,6 +166,13 @@ Item {
     // QML's clipboard story is fragmented across versions — TextEdit's
     // selectAll + built-in copy() is the portable trick that doesn't need
     // a C++ shim. The wrapper has a different name to avoid shadowing.
+    //
+    // TODO: once the basecamp host pins Qt ≥ 6.7, switch to the proper API.
+    // Two candidates depending on what ships in the host's Qt build:
+    //   - `Qt.application.clipboard.text = s`  (Qt Quick, Qt 6.x where
+    //     QGuiApplication::clipboard() is exposed to QML)
+    //   - `import Qt.labs.platform; Clipboard.setText(s)`
+    // Either removes the hidden TextEdit + selectAll dance below.
     TextEdit {
         id: copyHelper
         visible: false
