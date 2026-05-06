@@ -3,6 +3,28 @@
 > Companion to `SPEC.md`. Vertical slices, dependency-ordered, sized S/M.
 > Each task has acceptance criteria and a concrete verification step.
 
+## Status (2026-05-06)
+
+**Done:** Phase 0 (skipped — scaffold pin assumed working), 1.1 / 1.2 / 1.3,
+2.1, 3.1, 3.2, 3.3.
+
+**Resume here:** Phase 3.4 — map + timeline view fed by the stub core.
+After 3.4 lands, 3.5 (timeline scrubber) closes Phase 3 and the
+single-instance demo works end-to-end on the stub.
+
+**Notable deviations from the original plan**, documented in commit history
+and reflected in the per-task checkboxes below:
+- 3.2 chose OSM tile servers (zoom capped at z=9) over a bundled offline
+  tile source. SPEC §7.10 carries a temporary carve-out; long-term target
+  is tile distribution over Logos Storage as a separate prototype project.
+- 3.3 default timestamp is "now" (dialog open time), not file mtime —
+  reading mtime from a `file://` URL would have required either a new
+  `Q_INVOKABLE` on the locked Phase 1.3 core interface or a C++ helper in
+  the pure-QML UI module. Picker is fully editable to backdate.
+- A bundle-completeness CI gate was added during 3.1 after a silent-drop
+  trap (untracked QML files don't appear in the lgx bundle). Scoped to
+  top-level `*.qml` during 3.3 to allow `tests/` files to coexist.
+
 ## Overview
 
 Build the v0 application end-to-end — from `lgs basecamp setup` to a
@@ -203,17 +225,17 @@ behaviour is replaced phase-by-phase — the interface does not change.
 
 ## Phase 2 — UI module skeleton
 
-### Task 2.1: Scaffold `logos-witness-ui-qml`
+### Task 2.1: Scaffold `logos-witness-ui-qml` ✅ DONE (commit 6162286)
 
 **Description:** `nix flake init` from the QML UI template variant.
 Rename placeholders. Wire a tiny JS helper around
 `logos.callModule("logos_witness_core", ...)`.
 
 **Acceptance criteria:**
-- [ ] UI module builds via `nix build '.#lgx'`
-- [ ] Installs into basecamp's UI plugins dir via `lgpm`
-- [ ] Renders a placeholder window when launched in basecamp
-- [ ] A "ping core" button calls `listInscriptions` and renders the
+- [x] UI module builds via `nix build '.#lgx'`
+- [x] Installs into basecamp's UI plugins dir via `lgpm`
+- [x] Renders a placeholder window when launched in basecamp
+- [x] A "ping core" button calls `listInscriptions` and renders the
       (empty) result
 
 **Verification:** Manual launch via `lgs basecamp launch`; ping returns.
@@ -228,53 +250,97 @@ The user-facing flow becomes demo-able here. No network, no Storage, no
 chain — the stub core is the entire backend. This is the moment to
 iterate on UX with cheap iteration cost.
 
-### Task 3.1: File picker + photo preview
+### Task 3.1: File picker + photo preview ✅ DONE (commit 9074053)
 
 **Description:** `SubmitDialog.qml` — open file picker, show photo preview,
 no auto-publish.
 
-**Acceptance criteria:** picker opens, image renders, no calls to core yet.
+**Acceptance criteria:**
+- [x] picker opens, image renders, no calls to core yet
 
 **Verification:** Manual.
 
 **Dependencies:** 2.1. **Scope:** S.
 
-### Task 3.2: Geohash drop-pin on map (offline tiles)
+### Task 3.2: Geohash drop-pin on map ✅ DONE (commit 9074053)
 
-**Description:** `MapView.qml` lite — bundled tile set or Qt Location
-offline cache; click drops a pin; pin returns a geohash precision-8
-string. SPEC §7.10 forbids third-party tiles, so picking the offline
-tile source is part of this task.
-
-**Acceptance criteria:**
-- [ ] Click on map → `geohash` string returned to caller
-- [ ] Tile source is fully offline / bundled (no third-party API)
-- [ ] Precision is exactly 8 characters
-
-**Verification:** Manual; verify offline by disabling network.
-
-**Dependencies:** 2.1. **Scope:** M. **Risk:** MEDIUM — offline tile source.
-
-### Task 3.3: Timestamp confirm + submit wire-up
-
-**Description:** Show timestamp picker (defaults to file mtime); user
-confirms; on click, calls `submitPhoto(filePath, timestamp, geohash)`.
+**Description:** `MapView.qml` — Qt Location's `osm` plugin renders OSM
+tiles at low zoom (max z=9, no street-name detail); click drops a pin
+and emits `pinned(geohash, lat, lon)`. SPEC §7.10 was rewritten to
+carry an explicit, temporary carve-out for OSM tiles as the sole
+permitted external data source for v0; long-term direction is tile
+distribution over Logos Storage as a separate prototype project.
 
 **Acceptance criteria:**
-- [ ] User cannot submit without explicit confirmation click (SPEC §7.2)
-- [ ] On success the dialog closes and the new Ref appears in the map
-      view (Task 3.4)
+- [x] Click on map → `geohash` string returned to caller
+- [x] ~~Tile source is fully offline / bundled (no third-party API)~~
+      **Deviated:** OSM tile servers, capped at z=9. Carved out
+      explicitly in SPEC §7.10. README privacy section flags that
+      map browse leaks IP + viewed region to OSMF, in contrast to
+      the anonymous submission pipeline.
+- [x] Precision is exactly 8 characters
 
-**Verification:** Manual e2e in basecamp against the stub core.
+**Bonus shipped:** lat/lon readout with copy-to-clipboard so users can
+paste into another app to verify the pin location.
+
+**Verification:** Manual.
+
+**Dependencies:** 2.1. **Scope:** M. **Risk:** MEDIUM — landed.
+
+### Task 3.3: Timestamp confirm + submit wire-up ✅ DONE (commit f48bc28)
+
+**Description:** Submit tab + Submit button. Calls `submitPhoto(filePath,
+timestamp, geohash)` on the stub core. Default timestamp deviates from
+the original "file mtime" plan — see Status section above for rationale.
+
+**Acceptance criteria:**
+- [x] User cannot submit without explicit confirmation click (SPEC §7.2):
+      Submit button stays disabled until file + pin + timestamp are all
+      set; no auto-publish path exists.
+- [x] On success the dialog closes; the new Ref appears in the map view
+      once Task 3.4 lands. Today the stub core's `referenceObserved`
+      signal fires after a successful submit; 3.4 consumes it.
+
+**TDD shipped:** `SubmitHelpers.js` + `tests/tst_submit_helpers.qml`
+(7 unit tests under `qmltestrunner`, wired into CI). Covers
+`unixSecondsString`, `canSubmit`, `filePathFromUrl`. The dialog inlines
+the same logic because the lgx UI builder only globs top-level
+`*.qml` into the bundle.
+
+**Verification:** Manual e2e in basecamp against the stub core; CI
+exercises the helper unit tests.
 
 **Dependencies:** 3.1, 3.2, 1.3. **Scope:** S.
 
-### Task 3.4: Map + timeline view fed by the stub core
+### Task 3.4: Map + timeline view fed by the stub core — NEXT
 
-**Description:** Subscribe to `referenceObserved` and merge with
-`listInscriptions` results into a model. Map markers + scrollable timeline.
-Click marker → fetch blob (stub: just shows the local file path, since
-there is no Storage yet).
+**Description:** Replace the current `Main.qml` (two buttons + JSON
+status area) with the actual app shell — a full-window MapView (the
+same `MapView.qml` from 3.2, but used in display mode, not picker mode)
+overlaid with a scrollable timeline panel. On module init, call
+`listInscriptions()` to seed the model; subscribe to
+`referenceObserved` for live updates from the core. Click a marker →
+fetch the blob (stub: just shows the local file path, since there is
+no Storage yet). The Submit button stays in `Main.qml` and opens the
+existing `SubmitDialog`.
+
+**Concrete pointers for the next session:**
+- `MapView.qml` currently mixes "click to pick a geohash" with display.
+  Either factor out a display-only mode (a `pickable` bool prop), or
+  introduce a separate `MapDisplay.qml` that shares the OSM `Plugin`
+  and zoom-cap config but renders a `MapItemView` of received pins.
+  The factoring decision belongs to 3.4 — the simpler path is probably
+  a `pickable` flag on the existing component.
+- `referenceObserved(QByteArray refBytes)` carries a serialized
+  `Reference` protobuf — see `proto/reference.proto`. The UI needs a
+  decoder. Options: (a) add a `Q_INVOKABLE QVariantMap decodeReference(
+  QByteArray)` to the core (smallest interface change, keeps protobuf
+  out of QML); (b) ship a JS protobuf decoder (heavier, no native dep
+  but doubles wire-format definition). Recommend (a).
+- The "marker click → fetch blob" stub for v0 is just the local file
+  path stored alongside the Ref. Phase 5 swaps in real Storage.
+- A second `qmltest` is worth adding here for the timeline-model
+  merge logic (live observed + historical scan dedupe-by-content_hash).
 
 **Acceptance criteria:**
 - [ ] New Refs appear within 1 s of submit (single-instance)
