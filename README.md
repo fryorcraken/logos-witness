@@ -7,21 +7,41 @@ Delivery and durably committed in batches as on-chain inscriptions via
 `zone-sdk`. Other instances of the app render contributions on a shared
 map+timeline.
 
-> **Status:** pre-alpha. Photos only in v0; video and live capture are
-> deferred. See [`SPEC.md`](./SPEC.md) for the authoritative design.
+> **Status:** pre-alpha, Phase 1 of [`PLAN.md`](./PLAN.md) complete.
+> Photos-only in v0; video and live capture are deferred. See
+> [`SPEC.md`](./SPEC.md) for the authoritative design.
+
+## What works today (Phase 1)
+
+The core module (`logos_witness_core`) builds, installs into a basecamp
+profile, and round-trips through `logoscore` against an in-memory stub
+store. No network, no chain, no UI yet — strip pipeline (Phase 4),
+Storage (5), Delivery (6) and `zone-sdk` (7) replace the stubs in turn,
+and the QML UI module lands in Phase 2. The `Q_INVOKABLE` interface
+surface is locked so later phases can swap implementations without
+disturbing callers.
+
+| Concern                  | Today (Phase 1)                       | After Phase…                |
+| ------------------------ | ------------------------------------- | --------------------------- |
+| EXIF / metadata strip    | none — sha256 of raw bytes            | Phase 4                     |
+| Photo storage            | nothing stored, just a hash           | Phase 5 (Logos Storage)     |
+| Cross-instance discovery | none — single process only            | Phase 6 (Delivery pub/sub)  |
+| On-chain inscription     | `flushBatch` is a no-op stub          | Phase 7 (zone-sdk)          |
+| User interface           | none — `logoscore` CLI only           | Phase 2 (QML UI module)     |
 
 ## Architecture at a glance
 
 Two LGX modules, both built with Nix and installed into `logos-basecamp`:
 
-| Module               | Type | Role                                                             |
-| -------------------- | ---- | ---------------------------------------------------------------- |
+| Module                 | Type | Role                                                             |
+| ---------------------- | ---- | ---------------------------------------------------------------- |
 | `logos_witness_core`   | core | EXIF strip, Storage upload, Delivery pub/sub, batch inscriber    |
-| `logos_witness_ui_qml` | UI   | File picker, geohash-on-map selector, submit, map+timeline view  |
+| `logos_witness_ui_qml` | UI   | File picker, geohash-on-map selector, submit, map+timeline view (Phase 2) |
 
-The single global Delivery topic is `/logos-witness/1/inscriptions/proto`.
-Each on-chain reference is a CBOR map: `{v, h, t, g}` — schema version,
-sha256 of the stripped photo, unix timestamp, geohash precision-8.
+The single global Delivery topic will be `/logos-witness/1/inscriptions/proto`.
+Each on-chain reference is a protobuf `Reference` message —
+`{schema_version, content_hash, timestamp, geohash}` — with a
+precision-8 geohash. See `logos-witness-core/proto/reference.proto`.
 
 ## Prerequisites
 
@@ -33,59 +53,84 @@ sha256 of the stripped photo, unix timestamp, geohash precision-8.
 
 ## Quickstart
 
+Build and install the core module into the seeded `alice` basecamp profile,
+then drive it from `logoscore`. (UI flow lands in Phase 2; for now this
+demonstrates the full Q_INVOKABLE surface against the in-memory stub.)
+
 ```bash
-git clone https://github.com/<org>/logos-witness.git
+git clone https://github.com/fryorcraken/logos-witness.git
 cd logos-witness
 
-# Resolve and install the pinned basecamp + both modules.
+# 1. Resolve and build basecamp + lgpm + alice/bob profiles.
 lgs basecamp setup
-lgs basecamp install
 
-# Launch basecamp with Witness installed.
-lgs basecamp launch
-```
-
-In basecamp, open **Witness Map**, click **Submit**, pick a photo, confirm
-the timestamp and geohash, and submit. The reference appears on the map
-immediately on every running instance subscribed to the Delivery topic.
-
-To commit the pending references on-chain, click **Commit batch** (manual
-trigger only in v0).
-
-## Build a single module manually
-
-```bash
-# Core
+# 2. Build the core module.
 cd logos-witness-core
-nix build '.#lgx'             # dev
-nix build '.#lgx-portable'    # portable
-
-# UI
-cd ../logos-witness-ui-qml
 nix build '.#lgx'
+
+# 3. Install into the alice profile.
+LGPM=/home/$USER/.cache/logos-scaffold/basecamp/$(grep -oP 'pin = "\K[^"]+' ../scaffold.toml | head -1)/lgpm-result/bin/lgpm
+ALICE=$PWD/../.scaffold/basecamp/profiles/alice/xdg-data/Logos/LogosBasecampDev
+$LGPM --modules-dir "$ALICE/modules" install --file result/logos-logos_witness_core-module-lib.lgx
 ```
 
-Inspect a built module:
+Then start `logoscore` and exercise the round-trip:
 
 ```bash
-nix build 'github:logos-co/logos-module/tutorial-v1#lm' --out-link ./lm
-./lm/bin/lm metadata logos-witness-core/result/lib/logos_witness_core_plugin.so
-./lm/bin/lm methods  logos-witness-core/result/lib/logos_witness_core_plugin.so
+# 4. Build logoscore (cached after first run).
+nix build 'github:logos-co/logos-logoscore-cli/tutorial-v1' --out-link /tmp/logoscore
+
+# 5. Start the daemon, load the module.
+/tmp/logoscore/bin/logoscore -D -m "$ALICE/modules"
+/tmp/logoscore/bin/logoscore load-module logos_witness_core
+
+# 6. Submit a photo (stub: no strip, no Storage; just hash + in-memory store).
+echo "demo photo" > /tmp/demo.jpg
+/tmp/logoscore/bin/logoscore call logos_witness_core submitPhoto /tmp/demo.jpg 1714867200 u4pruydq
+# → {"result":{"content_hash":"e0...","ok":true},"status":"ok"}
+
+# 7. List references back.
+/tmp/logoscore/bin/logoscore call logos_witness_core listInscriptions
+# → {"result":[{"content_hash":"e0...","geohash":"u4pruydq","schema_version":1,"timestamp":1714867200}],"status":"ok"}
+
+# 8. Manual batch flush is a no-op stub today (zone-sdk inscribe lands in Phase 7).
+/tmp/logoscore/bin/logoscore call logos_witness_core flushBatch
+# → {"result":{"flushed":0,"note":"stub: zone-sdk inscribe wired in Phase 7","ok":true},"status":"ok"}
+
+# 9. Stop the daemon when finished.
+/tmp/logoscore/bin/logoscore stop
 ```
 
-## Test
+The module call signature is `submitPhoto(<path>, <unix_seconds>, <geohash_8>)`.
+The timestamp is a decimal-string because `logoscore` and the LogosAPI
+marshalling forward numeric args as `QString` — a `qint64` slot fails the
+QMetaObject invocation silently. Geohash is precision-8 (≈ 20 m).
+
+## Inspect a built module
 
 ```bash
-# Unit tests (Qt Test)
+nix build 'github:logos-co/logos-module/tutorial-v1#lm' --out-link /tmp/lm
 cd logos-witness-core
-nix develop --command bash -c 'cmake -B build -GNinja && cmake --build build && ctest --test-dir build'
-
-# Strip-pipeline residual-metadata gate (must report no identifying tags)
-exiftool -a -G1 logos-witness-core/tests/fixtures/*.stripped.jpg
+nix build '.#lib' --out-link result-lib
+/tmp/lm/bin/lm metadata result-lib/lib/logos_witness_core_plugin.so
+/tmp/lm/bin/lm methods  result-lib/lib/logos_witness_core_plugin.so
 ```
 
-See [`SPEC.md` §6](./SPEC.md#6-testing-strategy) for the integration and
-end-to-end layers.
+## Tests
+
+```bash
+# Protobuf reference codec round-trip (Phase 1.2).
+cd logos-witness-core
+nix develop --command bash -c '
+  cmake -B build -GNinja \
+    && cmake --build build --target test_reference_codec \
+    && ctest --test-dir build --output-on-failure'
+```
+
+The strip-pipeline residual-metadata gate (`exiftool -a` on stripped
+fixtures) lands in Phase 4. CI lands in Phase 9. See
+[`SPEC.md` §6](./SPEC.md#6-testing-strategy) and
+[`SPEC.md` §9](./SPEC.md#9-ci-and-release).
 
 ## Privacy posture
 
@@ -95,9 +140,11 @@ provided by Logos Core / Delivery transport; the chain entry itself
 carries nothing that links contributions to a single origin. Geohash
 precision is fixed at 8 (~20 m).
 
-The strip pipeline is fail-closed: any failure to verify that EXIF, XMP,
-ICC, maker-notes, and embedded thumbnails are gone aborts the upload.
-There is no `--keep-metadata` flag.
+The strip pipeline (Phase 4) is fail-closed: any failure to verify that
+EXIF, XMP, ICC, maker-notes, and embedded thumbnails are gone aborts the
+upload. There is no `--keep-metadata` flag. The Phase 1 stub does not
+strip — it only hashes — so the in-memory `content_hash` reflects raw
+bytes for now and will change shape once strip lands.
 
 See [`SPEC.md` §7 Boundaries](./SPEC.md#7-boundaries) for the full set of
 non-negotiable rules. **This README is part of the contract** — any change
@@ -108,14 +155,23 @@ the same commit.
 
 ```
 logos-witness/
-├── README.md                 # this file
-├── SPEC.md                   # authoritative design & boundaries
+├── README.md                  # this file
+├── SPEC.md                    # authoritative design & boundaries
+├── PLAN.md                    # phase-ordered task breakdown
 ├── LICENSE-MIT
 ├── LICENSE-APACHE
-├── scaffold.toml             # basecamp pin + module registry
-├── logos-witness-core/         # core LGX module (C++17 / Qt 6)
-└── logos-witness-ui-qml/       # QML UI LGX module
+├── scaffold.toml              # basecamp pin + module registry
+└── logos-witness-core/        # core LGX module (C++17 / Qt 6)
+    ├── CMakeLists.txt
+    ├── flake.nix              # pinned to logos-module-builder/tutorial-v1
+    ├── metadata.json
+    ├── proto/reference.proto  # wire / on-chain schema
+    ├── src/                   # interface + plugin + initLogos
+    ├── lib/                   # InMemoryStore (stub backend, Phase 1)
+    └── tests/                 # protobuf round-trip
 ```
+
+`logos-witness-ui-qml/` joins the tree at Phase 2.
 
 ## License
 
