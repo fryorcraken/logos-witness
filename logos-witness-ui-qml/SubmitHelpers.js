@@ -31,3 +31,34 @@ function filePathFromUrl(url) {
     if (s.indexOf("file://") === 0) return s.substring(7)
     return s
 }
+
+// Niemeyer-2008 geohash. SPEC §2 fixes the wire-format precision at 8;
+// `precision` is parameterised so tests can pin shorter/longer outputs.
+// Output is on-chain (encoded into the protobuf Reference), so the
+// reference vectors in tst_submit_helpers.qml are the source of truth —
+// the inline copy in MapView.qml must match this implementation.
+var _GEOHASH_ALPHABET = "0123456789bcdefghjkmnpqrstuvwxyz"
+function encodeGeohash(lat, lon, precision) {
+    var latLo = -90.0, latHi = 90.0
+    var lonLo = -180.0, lonHi = 180.0
+    var bits = []
+    var even = true
+    while (bits.length < precision * 5) {
+        if (even) {
+            var lonMid = (lonLo + lonHi) / 2
+            if (lon >= lonMid) { bits.push(1); lonLo = lonMid }
+            else               { bits.push(0); lonHi = lonMid }
+        } else {
+            var latMid = (latLo + latHi) / 2
+            if (lat >= latMid) { bits.push(1); latLo = latMid }
+            else               { bits.push(0); latHi = latMid }
+        }
+        even = !even
+    }
+    var out = ""
+    for (var i = 0; i < bits.length; i += 5) {
+        var idx = bits[i]*16 + bits[i+1]*8 + bits[i+2]*4 + bits[i+3]*2 + bits[i+4]
+        out += _GEOHASH_ALPHABET.charAt(idx)
+    }
+    return out
+}

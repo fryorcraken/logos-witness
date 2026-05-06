@@ -42,4 +42,37 @@ TestCase {
         compare(SubmitHelpers.filePathFromUrl("file:///tmp/demo.jpg"), "/tmp/demo.jpg")
         compare(SubmitHelpers.filePathFromUrl("/tmp/demo.jpg"),        "/tmp/demo.jpg")
     }
+
+    // Geohash output is on-chain (SPEC §2 fixes precision at 8). A regression
+    // here corrupts every submitted Reference, so we pin against the canonical
+    // Wikipedia reference vector. MapView.qml inlines the same algorithm; if
+    // the two ever drift, fix MapView — this test is the source of truth.
+    function test_encodeGeohash_wikipedia_reference_vector() {
+        // (57.64911, 10.40744) → "u4pruydqqvj" — Wikipedia "Geohash" article.
+        // Truncated to 8 chars per SPEC §2.
+        compare(SubmitHelpers.encodeGeohash(57.64911, 10.40744, 8), "u4pruydq")
+    }
+
+    function test_encodeGeohash_origin() {
+        // (0, 0) → "s00000000…" — every halving picks the upper bit on lon
+        // (0 ≥ 0) and the lower bit on lat (0 < 45 after first split).
+        // The leading "s" is the canonical encoding of the prime-meridian
+        // equator point.
+        compare(SubmitHelpers.encodeGeohash(0.0, 0.0, 8), "s0000000")
+    }
+
+    function test_encodeGeohash_precision_is_respected() {
+        // Length must equal the requested precision exactly — the wire
+        // format is fixed-width.
+        compare(SubmitHelpers.encodeGeohash(57.64911, 10.40744, 5).length, 5)
+        compare(SubmitHelpers.encodeGeohash(57.64911, 10.40744, 8).length, 8)
+        compare(SubmitHelpers.encodeGeohash(57.64911, 10.40744, 12).length, 12)
+    }
+
+    function test_encodeGeohash_uses_base32_alphabet() {
+        // Standard Niemeyer alphabet excludes a, i, l, o.
+        var s = SubmitHelpers.encodeGeohash(57.64911, 10.40744, 8)
+        verify(/^[0-9bcdefghjkmnpqrstuvwxyz]+$/.test(s),
+               "expected base32-geohash chars only, got: " + s)
+    }
 }

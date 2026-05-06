@@ -28,22 +28,28 @@ Item {
 
     signal pinned(string geohash, real latitude, real longitude)
 
-    // Standard Niemeyer-2008 geohash. SPEC §2 fixes precision at 8.
-    // Inlined rather than imported as a .js library because the lgx UI
-    // builder only globs `*.qml` files into the bundle (see flake of
-    // logos-module-builder/lib/mkLogosQmlModule.nix).
+    // Niemeyer-2008 geohash, mirrored from SubmitHelpers.js::encodeGeohash.
+    // SPEC §2 fixes precision at 8. Inlined rather than imported as a .js
+    // library because the lgx UI builder only globs `*.qml` files into the
+    // bundle (see flake of logos-module-builder/lib/mkLogosQmlModule.nix).
+    // Keep this in lockstep with SubmitHelpers.js; tst_submit_helpers.qml
+    // pins the canonical output via Wikipedia reference vectors.
     readonly property string _geohashAlphabet: "0123456789bcdefghjkmnpqrstuvwxyz"
     function _encodeGeohash(lat, lon, precision) {
-        var latRange = [-90.0, 90.0]
-        var lonRange = [-180.0, 180.0]
+        var latLo = -90.0, latHi = 90.0
+        var lonLo = -180.0, lonHi = 180.0
         var bits = []
         var even = true
         while (bits.length < precision * 5) {
-            var range = even ? lonRange : latRange
-            var v = even ? lon : lat
-            var mid = (range[0] + range[1]) / 2
-            if (v >= mid) { bits.push(1); range[0] = mid }
-            else          { bits.push(0); range[1] = mid }
+            if (even) {
+                var lonMid = (lonLo + lonHi) / 2
+                if (lon >= lonMid) { bits.push(1); lonLo = lonMid }
+                else               { bits.push(0); lonHi = lonMid }
+            } else {
+                var latMid = (latLo + latHi) / 2
+                if (lat >= latMid) { bits.push(1); latLo = latMid }
+                else               { bits.push(0); latHi = latMid }
+            }
             even = !even
         }
         var out = ""
