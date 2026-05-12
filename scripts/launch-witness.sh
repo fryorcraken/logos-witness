@@ -42,6 +42,16 @@ TRIMMED_WRAPPER="$(mktemp --suffix=.sh)"
 trap 'rm -f "$TRIMMED_WRAPPER"' EXIT
 # Drop the trailing `exec ...` line so sourcing just sets env.
 sed '$d' "$WRAPPER" > "$TRIMMED_WRAPPER"
+# The wrapper expands $DYLD_LIBRARY_PATH (macOS-only) and $LD_LIBRARY_PATH
+# unguarded; under `set -u` on Linux this aborts. It also tests
+# $WAYLAND_DISPLAY / $QT_QPA_PLATFORM with `[ -n ... ]`, which would also
+# trip `set -u` if either is unset. Pre-seed all four to empty so the
+# wrapper's append-style assignments work on a fresh login shell.
+: "${DYLD_LIBRARY_PATH:=}"
+: "${LD_LIBRARY_PATH:=}"
+: "${WAYLAND_DISPLAY:=}"
+: "${QT_QPA_PLATFORM:=}"
+: "${XDG_DATA_DIRS:=}"
 # shellcheck source=/dev/null
 . "$TRIMMED_WRAPPER"
 
@@ -56,10 +66,22 @@ if [ -z "${NIXPKGS_REV:-}" ]; then
     NIXPKGS_REV="$(python3 -c 'import json,sys; print(json.load(open("/tmp/lb-bc-launch/flake.lock"))["nodes"]["nixpkgs"]["locked"]["rev"])')"
 fi
 
-QTLOC_STORE="$(nix build --no-link --print-out-paths \
-    "github:nixos/nixpkgs/${NIXPKGS_REV}#qt6.qtlocation" 2>/dev/null)"
-QTPOS_STORE="$(nix build --no-link --print-out-paths \
-    "github:nixos/nixpkgs/${NIXPKGS_REV}#qt6.qtpositioning" 2>/dev/null)"
+# Honor pre-set QTLOC_STORE / QTPOS_STORE so callers without network/build
+# permissions (CI, sandboxed shells) can supply already-built store paths
+# directly. Falls back to `nix build` to fetch + build from nixpkgs.
+if [ -z "${QTLOC_STORE:-}" ]; then
+    QTLOC_STORE="$(nix build --no-link --print-out-paths \
+        "github:nixos/nixpkgs/${NIXPKGS_REV}#qt6.qtlocation" 2>/dev/null || true)"
+fi
+if [ -z "${QTPOS_STORE:-}" ]; then
+    QTPOS_STORE="$(nix build --no-link --print-out-paths \
+        "github:nixos/nixpkgs/${NIXPKGS_REV}#qt6.qtpositioning" 2>/dev/null || true)"
+fi
+if [ -z "${QTLOC_STORE}" ] || [ -z "${QTPOS_STORE}" ]; then
+    echo "could not resolve QtLocation/QtPositioning store paths" >&2
+    echo "  QTLOC_STORE='${QTLOC_STORE}'  QTPOS_STORE='${QTPOS_STORE}'" >&2
+    exit 1
+fi
 
 # 5. Append our plugin/library paths. Qt scans subdirs of each QT_PLUGIN_PATH
 #    entry, so `<qtlocation>/lib/qt-6/plugins/{geoservices,position}` etc.

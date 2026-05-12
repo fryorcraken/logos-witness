@@ -8,11 +8,11 @@
 **Done:** Phase 0 (skipped — scaffold pin assumed working), 1.1 / 1.2 / 1.3,
 2.1, 2.2 (bring-up in basecamp; basecamp + lgpm + module-builder pins
 bumped, vendored Qt6 QtLocation/QtPositioning imports, env-wedge launcher),
-3.1, 3.2, 3.3.
+3.1, 3.2, 3.3, 3.4 (map + timeline app shell + decode invokables + SPEC §2
+amendment locking decoders into the core surface).
 
-**Resume here:** Phase 3.4 — map + timeline view fed by the stub core.
-After 3.4 lands, 3.5 (timeline scrubber) closes Phase 3 and the
-single-instance demo works end-to-end on the stub.
+**Resume here:** Phase 3.5 — timeline scrubber wired to map filtering.
+That closes Phase 3 and the single-instance demo works end-to-end.
 
 **Notable deviations from the original plan**, documented in commit history
 and reflected in the per-task checkboxes below:
@@ -216,8 +216,19 @@ implement it against a process-local `InMemoryStore`:
 - `QVariantMap flushBatch()` → no-op in stub, returns `{ "ok": true,
   "flushed": <N> }`.
 - `void subscribeFeed()` (signals carry events).
+- `QVariantMap decodeReference(QByteArray refBytes)` → pure function over
+  wire-format bytes; returns the same shape `listInscriptions` entries
+  use. UI consumes `referenceObserved` payloads through this.
+- `QVariantMap decodeGeohash(QString geohash)` → returns
+  `{latitude, longitude}` of the geohash centroid. UI needs this to
+  place markers; SPEC §2 stores geohash only.
 - Signals: `referenceObserved(QByteArray refBytes)`,
   `inscriptionsLoaded(QVariantList refs)`.
+
+  The decoder invokables were added to the SPEC after Phase 1 landed
+  (see SPEC §2 Core module surface) — they were missing from the
+  original interface and get added as part of Task 3.4's first
+  sub-step.
 
 The interface is the contract for the rest of the project. The stub
 behaviour is replaced phase-by-phase — the interface does not change.
@@ -403,29 +414,76 @@ existing `SubmitDialog`.
 
 **Concrete pointers for the next session:**
 - `MapView.qml` currently mixes "click to pick a geohash" with display.
-  Either factor out a display-only mode (a `pickable` bool prop), or
-  introduce a separate `MapDisplay.qml` that shares the OSM `Plugin`
-  and zoom-cap config but renders a `MapItemView` of received pins.
-  The factoring decision belongs to 3.4 — the simpler path is probably
-  a `pickable` flag on the existing component.
+  Add a `pickable` bool prop (default true to preserve 3.2 callers): when
+  false, the click MouseArea and the floating geohash readout/copy frame
+  are inert. Same component handles both pick and display.
 - `referenceObserved(QByteArray refBytes)` carries a serialized
-  `Reference` protobuf — see `proto/reference.proto`. The UI needs a
-  decoder. Options: (a) add a `Q_INVOKABLE QVariantMap decodeReference(
-  QByteArray)` to the core (smallest interface change, keeps protobuf
-  out of QML); (b) ship a JS protobuf decoder (heavier, no native dep
-  but doubles wire-format definition). Recommend (a).
+  `Reference` protobuf. Per SPEC §2 Core module surface, the UI decodes
+  via the core's `decodeReference(QByteArray)` invokable — wire-format
+  knowledge stays single-sourced in C++. Similarly, geohash → centroid
+  for marker placement goes through `decodeGeohash(QString)`. Both
+  invokables are now part of the locked interface; implement them in
+  this task before the Main.qml rewrite.
+- Live-update path is empirical. Start by trying to subscribe to
+  `referenceObserved` from QML through the existing `logos` shim. If
+  basecamp's host bridge does not forward module-side signals into the
+  UI today, fall back to a 1 Hz `listInscriptions()` poll while the
+  window is foreground. Either outcome is acceptable for 3.4; if the
+  forwarding works, Phase 6 (Delivery) inherits a working signal path.
+  If polling is forced, add a §7 sandbox carve-out documenting it
+  alongside the existing `QNetworkAccessManager` deny-all and OSM tile
+  notes.
 - The "marker click → fetch blob" stub for v0 is just the local file
   path stored alongside the Ref. Phase 5 swaps in real Storage.
 - A second `qmltest` is worth adding here for the timeline-model
   merge logic (live observed + historical scan dedupe-by-content_hash).
 
 **Acceptance criteria:**
-- [ ] New Refs appear within 1 s of submit (single-instance)
-- [ ] Reload of the UI re-fetches via `listInscriptions` and re-renders
+- [x] New Refs appear within 1 s of submit (single-instance) — `SubmitDialog.onAccepted`
+      directly re-runs `listInscriptions`, no wait for the 5 s safety-net poll.
+- [x] Reload of the UI re-fetches via `listInscriptions` and re-renders
+      (`Component.onCompleted` calls `_refreshFromCore`).
 - [ ] Click marker shows a placeholder photo view (real Storage in Phase 5)
+      — currently shows a detail dialog with hash/geohash/timestamp + a
+      "photo preview lands in Phase 5" note. Manual verify pending.
+
+**Implementation notes (2026-05-12):**
+- SPEC §2 was amended to add `decodeReference` and `decodeGeohash`
+  invokables to the locked core surface. UI calls `decodeGeohash` per
+  marker to resolve geohash → centroid for map placement.
+- Geohash decode also lives in `logos-witness-core/lib/geohash.h` as a
+  Qt-free header so `tests/test_geohash.cpp` can verify the Niemeyer-2008
+  alphabet matches the encoder side (Wikipedia reference vectors).
+- `TimelineModel.js` is a `.pragma library` JS module imported from
+  `Main.qml`. Confirmed the lgx packager recursively copies the view
+  directory (so `.js` files ship in the bundle) — the stale
+  `SubmitHelpers.js` header comment was updated to reflect this.
+- Live updates are poll-based for v0: `SubmitDialog.onAccepted` triggers
+  an immediate refresh, plus a 5 s `Timer` safety net. The signal-
+  forwarding probe is deferred to Phase 6 where the Delivery wiring
+  needs cross-process signal transport anyway. No SPEC §7 carve-out
+  required because the SPEC never mandated signal-driven UI updates.
 
 **Verification:** Manual; submit 3 photos, see 3 markers + 3 timeline
 entries; close and reopen, still 3.
+
+**Follow-ups surfaced by review (track, do not block 3.4):**
+- `decodeReference` silently accepts unknown `schema_version`. proto3
+  forward-compat is intentional at the wire level, but the boundary
+  decoder should at minimum surface the version to callers (or reject
+  != 1 with an explicit error) once the schema actually moves. Revisit
+  when Phase 6 (Delivery decode) or Phase 7 (chain-scan decode) lands —
+  whichever first reads bytes produced by a foreign instance.
+- `decodeGeohash` is invoked per-marker per-refresh via the host bridge.
+  At v0 scale (<50 refs, 5 s poll) this is fine, but a `decodeGeohashes
+  (list)` batch invokable, or memoising the centroid in `TimelineModel.js`
+  keyed by geohash, would eliminate N synchronous round-trips per
+  refresh. Pick whichever fits when timelines grow past hundreds of
+  refs (Phase 7 historical scan is the natural trigger).
+- SPEC §2 lists `ok` only on `decodeReference`'s output; `listInscriptions`
+  entries omit it. Worth one extra sentence in §2 making that contrast
+  explicit so a future reader writing a strict consumer doesn't assume
+  every map is `{ok, …}`.
 
 **Dependencies:** 3.3. **Scope:** M.
 

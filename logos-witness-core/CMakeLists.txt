@@ -40,6 +40,7 @@ logos_module(
         src/logos_witness_core_interface.h
         src/logos_witness_core_plugin.h
         src/logos_witness_core_plugin.cpp
+        lib/geohash.h
         lib/in_memory_store.h
         lib/in_memory_store.cpp
         ${PROTO_SRC}
@@ -68,4 +69,8 @@ if(BUILD_TESTING)
     target_include_directories(test_reference_codec PRIVATE ${PROTO_GEN_DIR})
     target_link_libraries(test_reference_codec PRIVATE PkgConfig::PROTOBUF)
     add_test(NAME reference_codec_roundtrip COMMAND test_reference_codec)
+
+    add_executable(test_geohash tests/test_geohash.cpp)
+    target_include_directories(test_geohash PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/lib)
+    add_test(NAME geohash_decode COMMAND test_geohash)
 endif()

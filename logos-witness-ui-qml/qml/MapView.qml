@@ -8,11 +8,12 @@ import QtPositioning 6.5
 // SPEC §7.10: OSM is the sole permitted external data source for v0;
 // migrates to Logos-Storage-distributed tiles in a separate prototype.
 //
-// Click drops a pin and emits `pinned(geohash, lat, lon)`. Geohash is
-// always precision-8 per SPEC §2, computed from the click pixel — note
-// the visible map at z≤9 is far coarser than 20 m, so the geohash carries
-// more precision than the user could actually see. That's intentional:
-// the user is choosing what zoom they trust, the wire format is fixed.
+// Two modes share this component (Phase 3.4):
+//   - pickable: true  → click drops a pin and emits `pinned(...)`. Used by
+//     SubmitDialog to choose where a photo is anchored.
+//   - pickable: false → click does nothing; the floating geohash readout
+//     hides. Used by Main.qml's app-shell map showing received markers.
+// Both modes render the `markers` model below (empty in pick mode).
 
 Item {
     id: root
@@ -21,12 +22,22 @@ Item {
     readonly property int minZoomLevel: 2
     readonly property int maxZoomLevel: 9
 
+    // Mode switch. Default preserves the 3.2 pick-mode caller (SubmitDialog).
+    property bool pickable: true
+
+    // Pin (pick-mode) state. Untouched when pickable is false.
     property string pinGeohash: ""
     property real   pinLatitude: 0.0
     property real   pinLongitude: 0.0
     property bool   hasPin: false
 
+    // Display-mode markers. Each entry is `{latitude, longitude, contentHash,
+    // geohash, timestamp}`. Populated by Main.qml from listInscriptions +
+    // referenceObserved.
+    property var markers: []
+
     signal pinned(string geohash, real latitude, real longitude)
+    signal markerClicked(string contentHash)
 
     // Niemeyer-2008 geohash, mirrored from SubmitHelpers.js::encodeGeohash.
     // SPEC §2 fixes precision at 8. Inlined to keep the component
@@ -80,7 +91,7 @@ Item {
 
         MapQuickItem {
             id: pinMarker
-            visible: root.hasPin
+            visible: root.pickable && root.hasPin
             anchorPoint.x: pinIcon.width / 2
             anchorPoint.y: pinIcon.height
             coordinate: QtPositioning.coordinate(root.pinLatitude, root.pinLongitude)
@@ -95,8 +106,34 @@ Item {
             }
         }
 
+        // Display markers. MapItemView is the idiomatic QtLocation
+        // marker repeater; rebinding `markers` re-renders.
+        MapItemView {
+            model: root.markers
+            delegate: MapQuickItem {
+                anchorPoint.x: markerDot.width / 2
+                anchorPoint.y: markerDot.height / 2
+                coordinate: QtPositioning.coordinate(
+                    modelData.latitude, modelData.longitude)
+                sourceItem: Rectangle {
+                    id: markerDot
+                    width: 12
+                    height: 12
+                    radius: 6
+                    color: "#1d4ed8"
+                    border.color: "white"
+                    border.width: 2
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: root.markerClicked(modelData.contentHash)
+                    }
+                }
+            }
+        }
+
         MouseArea {
             anchors.fill: parent
+            enabled: root.pickable
             acceptedButtons: Qt.LeftButton
             onClicked: function (mouse) {
                 var coord = map.toCoordinate(Qt.point(mouse.x, mouse.y))
@@ -112,8 +149,9 @@ Item {
 
     // Pin readout: geohash + lat/lon with copy-to-clipboard, so users can
     // paste into another app to verify. Fixed precision per SPEC §2.
+    // Pick-mode only — display mode shows marker popups via Main.qml.
     Frame {
-        visible: root.hasPin
+        visible: root.pickable && root.hasPin
         anchors.left: parent.left
         anchors.bottom: parent.bottom
         anchors.margins: 8

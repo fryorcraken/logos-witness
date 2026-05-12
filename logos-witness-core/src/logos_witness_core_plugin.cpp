@@ -5,6 +5,7 @@
 #include <QDebug>
 #include <QFile>
 
+#include "geohash.h"
 #include "logos_api.h"
 #include "logos_api_client.h"
 
@@ -121,4 +122,28 @@ QVariantMap LogosWitnessCorePlugin::flushBatch() {
 void LogosWitnessCorePlugin::subscribeFeed() {
     // Stub: Delivery subscribe wired in Phase 6. Today, referenceObserved
     // signals fire from local submitPhoto only.
+}
+
+QVariantMap LogosWitnessCorePlugin::decodeReference(const QByteArray& refBytes) {
+    if (refBytes.isEmpty()) return errorMap("refBytes is empty");
+    logos::witness::v1::Reference ref;
+    if (!ref.ParseFromArray(refBytes.constData(), refBytes.size()))
+        return errorMap("protobuf parse failed");
+
+    QVariantMap r = referenceToVariant(ref);
+    r.insert("ok", true);
+    return r;
+}
+
+QVariantMap LogosWitnessCorePlugin::decodeGeohash(const QString& geohash) {
+    const auto res = logos::witness::geohash::decode(geohash.toStdString());
+    if (!res.ok) {
+        if (geohash.isEmpty()) return errorMap("geohash is empty");
+        return errorMap(QString("invalid geohash char at %1").arg(res.errorIndex));
+    }
+    QVariantMap r;
+    r.insert("ok", true);
+    r.insert("latitude",  res.latitude);
+    r.insert("longitude", res.longitude);
+    return r;
 }

@@ -84,6 +84,41 @@ Manual trigger only in v0 — the signing / transaction-submit interface is
 unstable and a hands-on flush keeps determinism. Automatic batching is a v1
 decision once the tx interface settles.
 
+### Core module surface
+
+The Q_INVOKABLE surface on `LogosWitnessCoreInterface` is the contract that
+the UI module and any `logoscore`/CLI consumer programs against. It splits
+into two groups:
+
+- **Behavioural** (state-changing or store-reading):
+  - `submitPhoto(filePath, timestamp, geohash) → {ok, error?, content_hash?}`
+  - `listInscriptions(filter?) → [Reference, …]`
+  - `flushBatch() → {ok, error?, flushed?}`
+  - `subscribeFeed() → void` (idempotent opt-in to the live feed; signals follow)
+- **Wire-format decoders** (pure functions over wire-format bytes):
+  - `decodeReference(QByteArray refBytes) → {ok, error?, schema_version?, content_hash?, timestamp?, geohash?}`
+  - `decodeGeohash(QString geohash) → {ok, error?, latitude?, longitude?}`
+
+The decoders exist because the UI module is pure-QML and cannot link the C++
+protobuf bindings the core uses internally. The two principled options were
+(a) compile a JS protobuf+geohash decoder into the UI bundle, duplicating
+wire-format knowledge in two languages, or (b) expose decoders on the core
+as pure functions. We took (b): one source of truth for the wire format,
+no second decoder to keep in sync. The decoders are required by the
+contract — `decodeReference` consumes the `referenceObserved` signal
+payload, `decodeGeohash` produces the lat/lon that map markers need
+(SPEC §2 stores geohash only). Backend swap-outs in Phases 4–7 do not
+disturb them; they are wire-format-only.
+
+Signals emitted upward from the core:
+
+- `referenceObserved(QByteArray refBytes)` — one serialised `Reference`
+- `inscriptionsLoaded(QVariantList refs)` — historical-scan completion
+
+Errors at the boundary surface as `QVariantMap { "ok": bool, "error": str,
+"data": ... }`. Internally, exceptions or `std::expected`-style results are
+fine; exceptions MUST NOT escape `Q_INVOKABLE` methods.
+
 ### Reference schema (protobuf)
 
 Inscribed and announced payloads are protobuf. Choice rationale: aligns with
@@ -261,8 +296,11 @@ exiftool -a -G1 logos-witness-core/tests/fixtures/*.stripped.jpg   # expect: not
 ### Protobuf
 
 - One source of truth: `logos-witness-core/proto/reference.proto`. The UI
-  module never defines its own messages; it links to or copies generated
-  bindings from the core module.
+  module never defines its own messages and never ships a parallel decoder.
+  The pure-QML UI consumes wire-format bytes only through the core's
+  `decodeReference` / `decodeGeohash` invokables (see §2 Core module
+  surface). Any future C++-linked UI tooling may use the generated
+  bindings directly; QML callers go through the invokables.
 - Generated C++ via `protoc --cpp_out` invoked from CMake. Generated files
   are NOT committed; they are build artifacts. Wire all generation through
   the `logos_module()` macro extensions or a small `proto/CMakeLists.txt`.

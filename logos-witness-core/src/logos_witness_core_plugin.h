@@ -31,6 +31,8 @@ public:
     Q_INVOKABLE QVariantList listInscriptions() override;
     Q_INVOKABLE QVariantMap flushBatch() override;
     Q_INVOKABLE void subscribeFeed() override;
+    Q_INVOKABLE QVariantMap decodeReference(const QByteArray& refBytes) override;
+    Q_INVOKABLE QVariantMap decodeGeohash(const QString& geohash) override;
 
     Q_INVOKABLE void initLogos(LogosAPI* logosAPIInstance);
 

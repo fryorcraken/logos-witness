@@ -1,12 +1,14 @@
 .pragma library
 
 // Phase 3.3 helpers for SubmitDialog. Kept as a .js library so qmltestrunner
-// can exercise them without a Qt Quick scene. Note: this file ships *only*
-// for tests; the SubmitDialog inlines the same logic because the lgx UI
-// builder only globs `*.qml` into the bundle (see flake of
-// logos-module-builder/lib/mkLogosQmlModule.nix). If the inline copy and
-// this file ever drift, the unit test will catch it because both end up
-// formatting the same Date.
+// can exercise them without a Qt Quick scene. The current lgx UI builder
+// (logos-module-builder/lib/mkLogosQmlModule.nix) recursively copies the
+// entire view directory, so this file is included in the runtime bundle
+// alongside Main.qml — confirmed by inspecting `tar tf result/*.lgx`.
+// Phase 3.3 originally inlined the helpers into SubmitDialog.qml as a
+// defensive measure against an earlier builder version that globbed only
+// `*.qml`; the inline copy is kept for now to avoid an unnecessary edit.
+// New consumers (Phase 3.4 `TimelineModel.js`) import from .js directly.
 
 // Convert a JS Date to a decimal-integer string of unix seconds.
 // `submitPhoto` slot expects a QString — see Phase 1.3 in PLAN.md / SPEC.

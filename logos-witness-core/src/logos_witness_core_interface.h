@@ -47,6 +47,18 @@ public:
 
     // Idempotent opt-in to the live Delivery feed. Signals fire after.
     Q_INVOKABLE virtual void subscribeFeed() = 0;
+
+    // Wire-format decoders. Pure functions; no store access. Exist so the
+    // pure-QML UI module can consume `referenceObserved` payloads and place
+    // map markers from geohash-only Refs without re-deriving the wire
+    // format. See SPEC §2 Core module surface.
+    // decodeReference returns the same `{schema_version, content_hash,
+    // timestamp, geohash}` shape that listInscriptions entries use, plus
+    // {ok, error?}.
+    Q_INVOKABLE virtual QVariantMap decodeReference(const QByteArray& refBytes) = 0;
+    // decodeGeohash returns `{ok, error?, latitude, longitude}` of the
+    // geohash centroid. Precision is whatever the input carries.
+    Q_INVOKABLE virtual QVariantMap decodeGeohash(const QString& geohash) = 0;
 };
 
 #define LogosWitnessCoreInterface_iid "org.logos.LogosWitnessCoreInterface"
