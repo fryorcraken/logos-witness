@@ -11,13 +11,22 @@ pin = "ed3bbedb4b684645da05455d30a4a0be7cc4dfe0"
 
 [repos.basecamp]
 source = "https://github.com/logos-co/logos-basecamp"
-pin = "20a3ce3bebe435b778ef06cf91105c283f8d4356"
+# Pre-release tag `pre-release-b44a5cf-260` (2026-05-08). The newest
+# tagged RC (`0.1.2-RC2`) shipped manifest v0.1.0 without integrity
+# hashes; bumping to this pre-release unlocked the v0.2.0 manifest +
+# hashes contract our installed plugin needs to register correctly.
+# Also matches the qtdeclarative-6.9.2 ABI of the QtLocation we
+# vendor under logos-witness-ui-qml/qml/.
+pin = "b44a5cf4787fc3a5c08e157227e791aee4d48064"
 build = "nix-flake"
 attr = "app"
 
 [repos.lgpm]
 source = "github:logos-co/logos-package-manager"
-pin = "e5c25989861f4487c3dc8c7b3bc0062bcbc3221f"
+# HEAD of `main` (2026-04-16). `tutorial-v1`, the only tagged ref, was
+# from 2026-03-27 and didn't emit the v0.2.0 manifest the bumped
+# basecamp expects.
+pin = "9101875bc103214855bc6217834e22e66802ed86"
 build = "nix-flake"
 attr = "cli"
 

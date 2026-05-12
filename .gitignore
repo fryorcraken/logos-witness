@@ -10,6 +10,11 @@ build-*/
 *.so
 *.dylib
 
+# Vendored Qt6 QML import dirs (basecamp doesn't ship QtLocation/QtPositioning;
+# we ship them with the plugin so MapView.qml resolves). Keep the .so plugins.
+!logos-witness-ui-qml/qml/QtLocation/*.so
+!logos-witness-ui-qml/qml/QtPositioning/*.so
+
 # LGX bundles (built artifacts)
 *.lgx
 

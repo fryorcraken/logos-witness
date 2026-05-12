@@ -352,20 +352,36 @@ require an explicit SPEC amendment.
    commit. CI fails the build if the README has not been touched alongside
    a change to user-facing surface (see §9). "Docs in a follow-up PR" is
    not acceptable.
+6. **Respect basecamp's UI plugin sandbox.** Every UI plugin's QML engine
+   is instantiated with a deny-all `QNetworkAccessManager` plus a
+   `RestrictedUrlInterceptor` that only allows `qrc:` and a small list of
+   filesystem roots. Consequences a UI contributor MUST design around:
+   - `Image.source = file://<user-picked-path>` is rejected; only paths
+     under basecamp's allowed roots resolve. The Photo tab is filename-only
+     until basecamp exposes a sanctioned local-image provider or photos
+     are routed through Logos Storage (Phase 5).
+   - File reads of user-supplied paths happen in the core module, not in
+     the UI plugin. The UI hands a path string across the
+     `logos.callModule()` bridge; the core does the I/O.
+   - QML imports basecamp does not bundle (e.g., `QtLocation`,
+     `QtPositioning`) are vendored into the plugin's view directory and
+     must be ABI-matched to basecamp's `qtdeclarative`. The refresh
+     procedure lives in the README; the source rev lives in the
+     `SOURCE.md` next to each vendored import.
 
 ### Ask first
 
-6. **Schema field changes.** Adding a field is routine; bumping `v` or
+7. **Schema field changes.** Adding a field is routine; bumping `v` or
    removing/renaming is a SPEC amendment.
-7. **Inscription batching policy.** Manual-only is the v0 contract.
+8. **Inscription batching policy.** Manual-only is the v0 contract.
    Switching to time-based or hybrid auto-flush requires confirming the
    signing/tx interface is stable and updating the SPEC.
-8. **Topic strategy.** Splitting beyond the single global topic.
-9. **Adding a third module** (e.g., a separate viewer-only app).
+9. **Topic strategy.** Splitting beyond the single global topic.
+10. **Adding a third module** (e.g., a separate viewer-only app).
 
 ### Never
 
-10. **Never call third-party network APIs**, with one explicit, temporary
+11. **Never call third-party network APIs**, with one explicit, temporary
     carve-out for v0: OSM tile servers (`tile.openstreetmap.org`) are the
     sole permitted external data source, capped at zoom level 9 (regional,
     no street-name detail), used only by the in-app map view. The carve-out
@@ -378,13 +394,13 @@ require an explicit SPEC amendment.
     CDNs, no "just this once" fetches. All non-tile assets are bundled or
     self-hosted. Aside from OSM tiles, the only network operations the app
     performs go through Logos Core (Delivery, Storage, chain).
-11. **Never publish unstripped bytes**, even in dev/debug paths. There is no
+12. **Never publish unstripped bytes**, even in dev/debug paths. There is no
     `--keep-metadata` flag.
-12. **Never inscribe a per-contributor identifier on chain.** No signer
+13. **Never inscribe a per-contributor identifier on chain.** No signer
     pubkey, device ID, app install ID, or anything that could pseudonymously
     cluster contributions to one origin. Discovery is geohash + timestamp;
     that is the entire on-chain payload contract.
-13. **Never store user photos outside Logos Storage**, including no local
+14. **Never store user photos outside Logos Storage**, including no local
     "originals" sidecar copy after submission. Once the stripped bytes are
     in Storage and the reference is queued, the original-on-disk lifecycle
     is the user's; the app does not retain it.
@@ -465,7 +481,7 @@ the tagged commit, including the docs gate.
   (Phase 3.2):** drop-pin on an OSM-backed map capped at zoom level 9, with
   the resulting geohash-8 and lat/lon both shown and copy-able from the pin
   readout so users can verify in another app.
-- Map tile source long-term — v0 uses OSM with the §7.10 carve-out; the
+- Map tile source long-term — v0 uses OSM with the §7 item 11 carve-out; the
   target end-state is tile distribution over Logos Storage, prototyped as
   a separate project. Open: when does Witness depend on it (v0.x, v1)?
 - Exact "user-facing surface" globs used by the README docs gate (§9.7) —

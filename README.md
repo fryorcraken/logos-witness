@@ -1,3 +1,5 @@
+<img src="logos-witness-ui-qml/icon.png" alt="" width="96" align="right" />
+
 # Logos Witness
 
 A basecamp application for publishing anonymous, time- and place-anchored
@@ -7,21 +9,22 @@ Delivery and durably committed in batches as on-chain inscriptions via
 `zone-sdk`. Other instances of the app render contributions on a shared
 map+timeline.
 
-> **Status:** pre-alpha, Phases 1, 2.1, 3.1, 3.2, and 3.3 of
+> **Status:** pre-alpha, Phases 1, 2.1, 2.2, 3.1, 3.2, and 3.3 of
 > [`PLAN.md`](./PLAN.md) complete. Photos-only in v0; video and live
 > capture are deferred. See [`SPEC.md`](./SPEC.md) for the authoritative
 > design.
 
-## What works today (Phases 1 + 2.1 + 3.1 + 3.2 + 3.3)
+## What works today
 
 The core module (`logos_witness_core`) builds, installs into a basecamp
 profile, and round-trips through `logoscore` against an in-memory stub
 store. The UI module (`logos_witness_ui_qml`) loads in basecamp and
 exposes two buttons: "ping core" calls `listInscriptions` via the
 `logos.callModule()` bridge and renders the JSON result; "Submit photo…"
-opens a modal dialog with three tabs — Photo (JPEG picker + preview),
-Location (OSM map capped at zoom 9; click drops a precision-8 geohash
-pin with copy-able lat/lon), and When (defaults to now, editable to
+opens a modal dialog with three tabs — Photo (JPEG picker, filename
+only — see "Vendored Qt imports" below for why there is no preview),
+Location (OSM map; click selects a place, drops a precision-8 geohash
+pin, lat/lon are copy-able), and When (defaults to now, editable to
 backdate). Submit stays disabled until all three inputs are set, then
 calls `submitPhoto(filePath, unixSecondsString, geohash8)` against the
 in-memory stub core via `logos.callModule()`; the dialog closes on
@@ -37,7 +40,7 @@ implementations without disturbing callers.
 | Photo storage            | nothing stored, just a hash           | Phase 5 (Logos Storage)     |
 | Cross-instance discovery | none — single process only            | Phase 6 (Delivery pub/sub)  |
 | On-chain inscription     | `flushBatch` is a no-op stub          | Phase 7 (zone-sdk)          |
-| User interface           | full submit flow against stub core (photo + geohash + time → submitPhoto) | Phase 3.4–3.5 (post-submit map + timeline scrubber) |
+| User interface           | submit flow against stub core (photo path + geohash + time → submitPhoto); no inline photo preview | Phase 3.4 (post-submit map + timeline) → 3.5 (scrubber) |
 
 ## Architecture at a glance
 
@@ -63,9 +66,9 @@ precision-8 geohash. See `logos-witness-core/proto/reference.proto`.
 
 ## Quickstart
 
-Build and install both modules into the seeded `alice` basecamp profile.
-The CLI flow drives the core module via `logoscore`; the UI flow needs
-basecamp launched (manual eyeball today, full submit + map land in Phase 3).
+Two ways to run today: the **CLI flow** (`logoscore`, easy, no GUI) and the
+**UI flow** (basecamp window, requires an env wedge — see "Launching the UI"
+below for why).
 
 ```bash
 git clone https://github.com/fryorcraken/logos-witness.git
@@ -74,42 +77,36 @@ cd logos-witness
 # 1. Resolve and build basecamp + lgpm + alice/bob profiles.
 lgs basecamp setup
 
-# 2. Build both modules.
-( cd logos-witness-core   && nix build '.#lgx' )
-( cd logos-witness-ui-qml && nix build '.#lgx' )
-
-# 3. Install into the alice profile.
-BASECAMP_PIN=$(grep -oP '(?<=^pin = ")[^"]+' scaffold.toml | head -1)
-LGPM=$HOME/.cache/logos-scaffold/basecamp/$BASECAMP_PIN/lgpm-result/bin/lgpm
-ALICE=$PWD/.scaffold/basecamp/profiles/alice/xdg-data/Logos/LogosBasecampDev
-$LGPM --modules-dir    "$ALICE/modules"     install --file logos-witness-core/result/logos-logos_witness_core-module-lib.lgx
-$LGPM --ui-plugins-dir "$ALICE/ui-plugins"  install --file logos-witness-ui-qml/result/logos-logos_witness_ui_qml-lib.lgx
+# 2. Build + install both modules into the alice/bob profiles.
+lgs basecamp install
 ```
 
-Then start `logoscore` and exercise the round-trip:
+### CLI flow: drive the core module via `logoscore`
 
 ```bash
-# 4. Build logoscore (cached after first run).
+ALICE=$PWD/.scaffold/basecamp/profiles/alice/xdg-data/Logos/LogosBasecampDev
+
+# 1. Build logoscore (cached after first run).
 nix build 'github:logos-co/logos-logoscore-cli/tutorial-v1' --out-link /tmp/logoscore
 
-# 5. Start the daemon, load the module.
+# 2. Start the daemon, load the module.
 /tmp/logoscore/bin/logoscore -D -m "$ALICE/modules"
 /tmp/logoscore/bin/logoscore load-module logos_witness_core
 
-# 6. Submit a photo (stub: no strip, no Storage; just hash + in-memory store).
+# 3. Submit a photo (stub: no strip, no Storage; just hash + in-memory store).
 echo "demo photo" > /tmp/demo.jpg
 /tmp/logoscore/bin/logoscore call logos_witness_core submitPhoto /tmp/demo.jpg 1714867200 u4pruydq
 # → {"result":{"content_hash":"e0...","ok":true},"status":"ok"}
 
-# 7. List references back.
+# 4. List references back.
 /tmp/logoscore/bin/logoscore call logos_witness_core listInscriptions
 # → {"result":[{"content_hash":"e0...","geohash":"u4pruydq","schema_version":1,"timestamp":1714867200}],"status":"ok"}
 
-# 8. Manual batch flush is a no-op stub today (zone-sdk inscribe lands in Phase 7).
+# 5. Manual batch flush is a no-op stub today (zone-sdk inscribe lands in Phase 7).
 /tmp/logoscore/bin/logoscore call logos_witness_core flushBatch
 # → {"result":{"flushed":0,"note":"stub: zone-sdk inscribe wired in Phase 7","ok":true},"status":"ok"}
 
-# 9. Stop the daemon when finished.
+# 6. Stop the daemon when finished.
 /tmp/logoscore/bin/logoscore stop
 ```
 
@@ -117,6 +114,54 @@ The module call signature is `submitPhoto(<path>, <unix_seconds>, <geohash_8>)`.
 The timestamp is a decimal-string because `logoscore` and the LogosAPI
 marshalling forward numeric args as `QString` — a `qint64` slot fails the
 QMetaObject invocation silently. Geohash is precision-8 (≈ 20 m).
+
+### UI flow: launching basecamp
+
+`lgs basecamp launch` runs basecamp via a wrapper script that hard-overrides
+`QT_PLUGIN_PATH`. Our UI module relies on vendored `QtLocation` +
+`QtPositioning` (see "Vendored Qt imports" below); to make them visible
+to Qt we bypass the wrapper and call basecamp's inner binary directly with
+the env we need. A helper script lives at [`scripts/launch-witness.sh`](./scripts/launch-witness.sh).
+
+```bash
+./scripts/launch-witness.sh alice
+```
+
+Pre-alpha caveat: the script reaches into the scaffold cache and reproduces
+the wrapper's env inline. It will keep working as long as the basecamp pin
+in `scaffold.toml` and the vendored Qt 6.9.2 imports stay in sync. Both
+move together — see "Vendored Qt imports" for the refresh procedure.
+
+### Vendored Qt imports
+
+`MapView.qml` imports `QtLocation` and `QtPositioning`, which basecamp does
+not bundle. We ship those QML import directories inside the UI module at
+[`logos-witness-ui-qml/qml/QtLocation/`](./logos-witness-ui-qml/qml/QtLocation)
+and `qml/QtPositioning/`, built from the same nixpkgs revision basecamp
+itself pins. They include their `.so` plugins; `.gitignore` carves an
+exception for those specific files.
+
+ABI requires the vendored imports to match basecamp's Qt **exactly** (a
+6.9.3 vs 6.9.2 minor bump fails with `undefined symbol _ZNK...AOTCompiledContext...`).
+To refresh after a basecamp pin bump:
+
+```bash
+NIXPKGS_REV=$(python3 -c 'import json; print(json.load(open("/tmp/lb-bc/flake.lock"))["nodes"]["nixpkgs"]["locked"]["rev"])')   # rev from basecamp's flake.lock
+QTLOC=$(nix build --no-link --print-out-paths "github:nixos/nixpkgs/$NIXPKGS_REV#qt6.qtlocation")
+QTPOS=$(nix build --no-link --print-out-paths "github:nixos/nixpkgs/$NIXPKGS_REV#qt6.qtpositioning")
+rm -rf logos-witness-ui-qml/qml/QtLocation logos-witness-ui-qml/qml/QtPositioning
+cp -r "$QTLOC/lib/qt-6/qml/QtLocation"   logos-witness-ui-qml/qml/QtLocation
+cp -r "$QTPOS/lib/qt-6/qml/QtPositioning" logos-witness-ui-qml/qml/QtPositioning
+chmod -R u+w logos-witness-ui-qml/qml/QtLocation logos-witness-ui-qml/qml/QtPositioning
+```
+
+No inline photo preview: basecamp installs a DenyAll `QNetworkAccessManager`
+on every UI plugin's QML engine, so `Image.source = file://<path>` is
+rejected for any local file path. The Photo tab shows the filename only;
+the core module (which has unrestricted filesystem access) reads the bytes
+on submit. Inline preview returns when basecamp exposes a sanctioned local
+image-provider API, or when we move photos through Logos Storage first
+(Phase 5).
 
 ## Inspect a built module
 
@@ -172,7 +217,7 @@ bytes for now and will change shape once strip lands.
 The submission pipeline is the part that's anonymity-shaped: stripped
 bytes, hash-only references, no signer on chain, network-layer anonymity
 via Logos Core. The **map browse** is not. v0 fetches tiles from
-`tile.openstreetmap.org` (the SPEC §7.10 carve-out), which means every
+`tile.openstreetmap.org` (the SPEC §7 item 11 carve-out), which means every
 pan and zoom is an HTTP request to OSMF logged with your IP and the
 viewed region. Zoom is capped at level 9 — no street-name detail — to
 narrow the leakage, but a determined observer of OSMF logs can still
@@ -197,21 +242,28 @@ logos-witness/
 ├── LICENSE-MIT
 ├── LICENSE-APACHE
 ├── scaffold.toml              # basecamp pin + module registry
+├── scripts/
+│   └── launch-witness.sh      # env-wedge launcher (see "UI flow")
 ├── logos-witness-core/        # core LGX module (C++17 / Qt 6)
 │   ├── CMakeLists.txt
-│   ├── flake.nix              # pinned to logos-module-builder/tutorial-v1
+│   ├── flake.nix              # pinned to logos-module-builder commit 5e196e2769
 │   ├── metadata.json
 │   ├── proto/reference.proto  # wire / on-chain schema
 │   ├── src/                   # interface + plugin + initLogos
 │   ├── lib/                   # InMemoryStore (stub backend, Phase 1)
 │   └── tests/                 # protobuf round-trip
 └── logos-witness-ui-qml/      # UI LGX module (QML)
-    ├── flake.nix              # pinned to logos-module-builder/tutorial-v1
-    ├── metadata.json
-    ├── Main.qml               # ping-core + open-submit-dialog buttons
-    ├── SubmitDialog.qml       # photo (3.1) + map (3.2) + when + submit (3.3)
-    ├── MapView.qml            # OSM map (z≤9), click → geohash-8 pin
-    ├── SubmitHelpers.js       # unit-tested arg/timestamp helpers
+    ├── flake.nix              # pinned to logos-module-builder commit 5e196e2769
+    ├── metadata.json          # view = qml/Main.qml, icon = icon.png
+    ├── icon.svg               # sidebar icon (source)
+    ├── icon.png               # sidebar icon (128×128, shipped in the .lgx)
+    ├── qml/                   # bundled as the view directory
+    │   ├── Main.qml           # ping-core + open-submit-dialog buttons
+    │   ├── SubmitDialog.qml   # photo (3.1) + map (3.2) + when + submit (3.3)
+    │   ├── MapView.qml        # OSM map, click → geohash-8 pin
+    │   ├── SubmitHelpers.js   # unit-tested arg/timestamp helpers
+    │   ├── QtLocation/        # vendored Qt 6.9.2 QML import (see README)
+    │   └── QtPositioning/     # vendored Qt 6.9.2 QML import (see README)
     └── tests/                 # qmltestrunner unit tests
 ```
 

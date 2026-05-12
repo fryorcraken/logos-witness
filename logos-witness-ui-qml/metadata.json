@@ -4,14 +4,14 @@
   "type": "ui_qml",
   "category": "app",
   "description": "Logos Witness UI: file picker, geohash-on-map selector, submit, map+timeline (Phase 2 skeleton)",
-  "main": "Main.qml",
-  "icon": null,
+  "view": "qml/Main.qml",
+  "icon": "icon.png",
   "dependencies": ["logos_witness_core"],
 
   "nix": {
     "packages": {
       "build": [],
-      "runtime": []
+      "runtime": ["qt6.qtlocation", "qt6.qtpositioning"]
     },
     "external_libraries": [],
     "cmake": {

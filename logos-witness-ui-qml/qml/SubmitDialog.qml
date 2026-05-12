@@ -3,17 +3,19 @@ import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import QtQuick.Dialogs
 
-// Phase 3.1 + 3.2 + 3.3: photo picker, geohash drop-pin via MapView,
+// Phases 3.1 + 3.2 + 3.3: photo picker, geohash drop-pin via MapView,
 // timestamp confirm, and submit wire-up to logos_witness_core.
 // SPEC §7.2: user must click Submit explicitly — there's no auto-publish
 // path. Submit stays disabled until file + pin + timestamp are all set.
 //
+// No inline photo preview: basecamp installs a DenyAll
+// QNetworkAccessManager on every UI plugin's QML engine, so
+// `Image.source = file:///…` is rejected for any local file. Filename
+// only on the Photo tab; core module reads the bytes on submit.
+//
 // Default timestamp is "now" (the moment the user opened this dialog),
-// not the file mtime. v0 cannot read mtime from a `file://` URL without
-// adding a Q_INVOKABLE to logos_witness_core or a C++ helper to the UI
-// module — both of those are real interface changes not justified for
-// what is, in practice, "what time was the photo taken?". File mtime is
-// usually download/transfer time anyway. Users adjust via the picker.
+// not the file mtime. v0 doesn't read EXIF DateTimeOriginal — that's a
+// future enhancement noted in the Photo + When tab labels.
 
 Dialog {
     id: submitDialog
@@ -33,7 +35,8 @@ Dialog {
     property bool   submitting: false
 
     // Mirror of SubmitHelpers.js — see that file for canonical impl + tests.
-    // Inlined because the lgx UI builder only globs `*.qml` into the bundle.
+    // Inlined to keep this Dialog self-contained; the canonical .js sits
+    // next to it under qml/ and is `import`able if we ever want to share.
     function _unixSecondsString(date) {
         return Math.floor(date.getTime() / 1000).toString()
     }
@@ -55,7 +58,11 @@ Dialog {
             Layout.fillWidth: true
             TabButton { text: submitDialog.selectedFile == "" ? "Photo" : "Photo ✓" }
             TabButton { text: submitDialog.hasPin               ? "Location ✓" : "Location" }
-            TabButton { text: "When" }
+            // When defaults to "now" on dialog open, so capturedAt is set as
+            // soon as the dialog is visible. Mirror the canSubmit clause
+            // (`capturedAt !== null`) so users see the same "ready" signal
+            // they get for Photo / Location.
+            TabButton { text: submitDialog.capturedAt !== null  ? "When ✓"     : "When" }
         }
 
         StackLayout {
@@ -64,8 +71,24 @@ Dialog {
             currentIndex: tabs.currentIndex
 
             // ---- Photo tab ----
+            // No inline preview: basecamp installs a DenyAll network access
+            // manager on UI-plugin QML engines, so Qt rejects `file://` (and
+            // even plain local paths) in Image.source. We show filename only;
+            // the picked path is read by the core module on submit, where
+            // filesystem access is unrestricted.
             ColumnLayout {
-                spacing: 8
+                spacing: 12
+                Layout.alignment: Qt.AlignTop
+
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    text: "Pick a JPEG to attach. "
+                          + "Then set a location and a time on the next tabs."
+                    color: "#666"
+                    font.pixelSize: 10
+                }
+
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 8
@@ -83,26 +106,8 @@ Dialog {
                         font.pixelSize: 11
                     }
                 }
-                Frame {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Image {
-                        anchors.fill: parent
-                        fillMode: Image.PreserveAspectFit
-                        asynchronous: true
-                        cache: false
-                        source: submitDialog.selectedFile
-                        visible: submitDialog.selectedFile != ""
-                    }
-                    Label {
-                        anchors.centerIn: parent
-                        visible: submitDialog.selectedFile == ""
-                        text: "Pick a JPEG to preview.\nLocation tab to drop a pin.\nWhen tab to set the time.\nThen click Submit."
-                        horizontalAlignment: Text.AlignHCenter
-                        color: "#888"
-                        font.pixelSize: 12
-                    }
-                }
+
+                Item { Layout.fillHeight: true }
             }
 
             // ---- Location tab ----
@@ -111,9 +116,8 @@ Dialog {
                 Label {
                     Layout.fillWidth: true
                     horizontalAlignment: Text.AlignHCenter
-                    text: "Click on the map to drop a pin. Zoom is capped at z=9 — "
-                          + "geohash precision is fixed at 8 (~20 m) per SPEC §2; "
-                          + "use the Copy buttons to paste lat/lon into another app."
+                    text: "Click on the map to select where the photo was taken. "
+                          + "Future versions will read GPS from the photo automatically."
                     wrapMode: Text.WordWrap
                     color: "#666"
                     font.pixelSize: 10
@@ -139,9 +143,8 @@ Dialog {
                 Label {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
-                    text: "Defaults to now (the time you opened this dialog). "
-                          + "Edit the values below to set a different capture time. "
-                          + "v0 stores this as integer unix seconds; subseconds are dropped."
+                    text: "Defaults to now. Edit the date and time to backdate. "
+                          + "Future versions will read the capture time from the photo automatically."
                     color: "#666"
                     font.pixelSize: 10
                 }
@@ -162,7 +165,7 @@ Dialog {
                         onEditingFinished: submitDialog._recomputeCapturedAt()
                     }
 
-                    Label { text: "Time (HH:MM:SS, UTC):" }
+                    Label { text: "Time (HH:MM:SS):" }
                     TextField {
                         id: timeField
                         Layout.preferredWidth: 110
@@ -175,14 +178,6 @@ Dialog {
                         }
                         onEditingFinished: submitDialog._recomputeCapturedAt()
                     }
-                }
-
-                Label {
-                    Layout.fillWidth: true
-                    text: "→ unix seconds: " + submitDialog._unixSecondsString(submitDialog.capturedAt)
-                    font.family: "monospace"
-                    color: "#444"
-                    font.pixelSize: 11
                 }
 
                 Item { Layout.fillHeight: true }
@@ -247,13 +242,15 @@ Dialog {
             var result = logos.callModule(
                 "logos_witness_core", "submitPhoto",
                 [path, stamp, pinGeohash])
-            // The submitPhoto contract returns { ok: true, content_hash } via
-            // QVariantMap. In the JSON marshalling some hosts wrap that in
-            // { result: {...}, status: "ok" } — accept both shapes.
-            var ok = (result && result.ok === true)
-                  || (result && result.result && result.result.ok === true)
-            if (!ok) {
-                lastError = "submitPhoto returned: " + JSON.stringify(result)
+            // basecamp's logos.callModule bridge returns the core's
+            // QVariantMap as a JSON-encoded string, not a parsed object.
+            // Parse it before inspecting `ok`; if parsing fails treat the
+            // whole call as a failure with the raw payload in the error.
+            var parsed = null
+            try { parsed = (typeof result === "string")
+                           ? JSON.parse(result) : result } catch (_) {}
+            if (!parsed || parsed.ok !== true) {
+                lastError = "Submit failed. Core returned: " + JSON.stringify(result)
                 submitting = false
                 return
             }

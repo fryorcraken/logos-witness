@@ -29,11 +29,10 @@ Item {
     signal pinned(string geohash, real latitude, real longitude)
 
     // Niemeyer-2008 geohash, mirrored from SubmitHelpers.js::encodeGeohash.
-    // SPEC §2 fixes precision at 8. Inlined rather than imported as a .js
-    // library because the lgx UI builder only globs `*.qml` files into the
-    // bundle (see flake of logos-module-builder/lib/mkLogosQmlModule.nix).
-    // Keep this in lockstep with SubmitHelpers.js; tst_submit_helpers.qml
-    // pins the canonical output via Wikipedia reference vectors.
+    // SPEC §2 fixes precision at 8. Inlined to keep the component
+    // self-contained without a top-of-file import; keep it in lockstep with
+    // SubmitHelpers.js. tst_submit_helpers.qml pins the canonical output
+    // via Wikipedia reference vectors.
     readonly property string _geohashAlphabet: "0123456789bcdefghjkmnpqrstuvwxyz"
     function _encodeGeohash(lat, lon, precision) {
         var latLo = -90.0, latHi = 90.0

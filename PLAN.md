@@ -3,10 +3,12 @@
 > Companion to `SPEC.md`. Vertical slices, dependency-ordered, sized S/M.
 > Each task has acceptance criteria and a concrete verification step.
 
-## Status (2026-05-06)
+## Status (2026-05-12)
 
 **Done:** Phase 0 (skipped — scaffold pin assumed working), 1.1 / 1.2 / 1.3,
-2.1, 3.1, 3.2, 3.3.
+2.1, 2.2 (bring-up in basecamp; basecamp + lgpm + module-builder pins
+bumped, vendored Qt6 QtLocation/QtPositioning imports, env-wedge launcher),
+3.1, 3.2, 3.3.
 
 **Resume here:** Phase 3.4 — map + timeline view fed by the stub core.
 After 3.4 lands, 3.5 (timeline scrubber) closes Phase 3 and the
@@ -14,13 +16,34 @@ single-instance demo works end-to-end on the stub.
 
 **Notable deviations from the original plan**, documented in commit history
 and reflected in the per-task checkboxes below:
-- 3.2 chose OSM tile servers (zoom capped at z=9) over a bundled offline
-  tile source. SPEC §7.10 carries a temporary carve-out; long-term target
-  is tile distribution over Logos Storage as a separate prototype project.
+- 3.1 acceptance criterion "image renders" is technically NOT met under
+  basecamp: the UI plugin's QML engine has a deny-all
+  `QNetworkAccessManager` that rejects `Image.source = file://<path>`. We
+  ship filename-only on the Photo tab; the core module reads the bytes on
+  submit (its process has unrestricted filesystem access). Inline preview
+  returns when basecamp exposes a sanctioned local-image provider or when
+  photos move through Logos Storage (Phase 5). Documented in
+  `SubmitDialog.qml` header and SPEC §7 item 6.
+- 3.2 chose OSM tile servers over a bundled offline tile source. SPEC §7
+  item 11 carries a temporary carve-out; long-term target is tile
+  distribution over Logos Storage as a separate prototype project. The
+  zoom cap (z=9) is enforced inside `MapView.qml` via
+  `minimumZoomLevel`/`maximumZoomLevel`; the UI no longer narrates the
+  cap to users (it was internal copy on a non-interactive control).
 - 3.3 default timestamp is "now" (dialog open time), not file mtime —
   reading mtime from a `file://` URL would have required either a new
   `Q_INVOKABLE` on the locked Phase 1.3 core interface or a C++ helper in
-  the pure-QML UI module. Picker is fully editable to backdate.
+  the pure-QML UI module. Picker is fully editable to backdate. EXIF
+  DateTimeOriginal auto-fill is mentioned in the When-tab label as a TBD.
+- Phase 2.2 (bring-up in basecamp) was unplanned: getting the UI module
+  to actually load + run in basecamp required cascading pin bumps
+  (basecamp → pre-release-b44a5cf-260, lgpm → main, module-builder →
+  5e196e2769), a metadata.json migration to manifest v0.2.0 (`view`
+  replacing `main`), vendoring of Qt 6.9.2 QtLocation/QtPositioning QML
+  imports, and a launcher script that bypasses basecamp's wrapper to
+  inject `QT_PLUGIN_PATH`. See README → "Vendored Qt imports" and
+  `scripts/launch-witness.sh`. SPEC §7 item 6 captures the sandbox
+  constraints this work surfaced.
 - A bundle-completeness CI gate was added during 3.1 after a silent-drop
   trap (untracked QML files don't appear in the lgx bundle). Scoped to
   top-level `*.qml` during 3.3 to allow `tests/` files to coexist.
@@ -244,19 +267,73 @@ Rename placeholders. Wire a tiny JS helper around
 
 ---
 
+### Task 2.2: Bring-up in basecamp (unplanned) ✅ DONE
+
+**Description:** Get the UI module to actually load + run in a current
+basecamp window. The originally-targeted basecamp (and the modules
+built against `logos-module-builder/tutorial-v1`) used an older
+manifest format that newer basecamp / lgpm reject. Required cascading
+pin bumps, a manifest migration, vendoring two Qt6 QML imports, and a
+custom launcher.
+
+**Acceptance criteria:**
+- [x] basecamp pin bumped to a release with the v0.2.0 manifest
+      contract (`pre-release-b44a5cf-260` at the time of writing); see
+      `scaffold.toml` rationale comment.
+- [x] `logos-package-manager` pinned to a `main` commit that emits the
+      v0.2.0 manifest + integrity hashes during `lgpm install`.
+- [x] `logos-module-builder` pinned to a commit whose
+      `mkLogosQmlModule` packager understands the new manifest +
+      bundles the whole `qml/` view directory (the old default copied
+      only the named view file).
+- [x] `logos-witness-ui-qml/metadata.json` migrated: `view: qml/Main.qml`
+      replacing `main: Main.qml`; QML moved under `qml/`.
+- [x] `logos-witness-core/src/logos_witness_core_plugin.cpp::initLogos`
+      stops deleting the framework-set `logosAPI` global; without this
+      change the new framework's QRemoteObjects registry never came up
+      and the UI's `logos.callModule()` calls hung.
+- [x] `QtLocation` + `QtPositioning` (Qt 6.9.2, matching basecamp's
+      `qtdeclarative`) vendored under `logos-witness-ui-qml/qml/` so
+      `MapView.qml` resolves at runtime; refresh procedure documented
+      in README → "Vendored Qt imports".
+- [x] `scripts/launch-witness.sh` replicates basecamp's wrapper env,
+      prepends our QtLocation/QtPositioning paths to `QT_PLUGIN_PATH`
+      and `LD_LIBRARY_PATH`, then execs `.LogosBasecamp` directly. The
+      stock `lgs basecamp launch` wrapper hard-overrides
+      `QT_PLUGIN_PATH`, so injection has to happen post-wrapper.
+
+**Verification:** `./scripts/launch-witness.sh alice` — basecamp comes
+up, the witness icon appears in the sidebar, clicking it loads the UI
+without an instant unload, "ping core" returns the empty inscription
+list, and the Submit dialog walks Photo → Location → When → Submit
+against the stub core with `ok: true`.
+
+**Dependencies:** 2.1. **Scope:** L (the work was discovery-heavy).
+The remaining sandbox constraints (no inline photo preview, vendored
+Qt imports) are captured in SPEC §7 item 6.
+
+---
+
 ## Phase 3 — UI vertical against the stub core
 
 The user-facing flow becomes demo-able here. No network, no Storage, no
 chain — the stub core is the entire backend. This is the moment to
 iterate on UX with cheap iteration cost.
 
-### Task 3.1: File picker + photo preview ✅ DONE (commit 9074053)
+### Task 3.1: File picker + photo preview ✅ DONE (commit 9074053; preview deferred — see deviation)
 
 **Description:** `SubmitDialog.qml` — open file picker, show photo preview,
 no auto-publish.
 
 **Acceptance criteria:**
-- [x] picker opens, image renders, no calls to core yet
+- [x] picker opens, no calls to core yet
+- [~] image renders **— deferred.** Under basecamp the UI plugin's QML
+      engine has a deny-all `QNetworkAccessManager` that rejects
+      `Image.source = file:///<path>`. Photo tab shows filename only;
+      the picked path is read by the core module on submit. Inline
+      preview returns when basecamp exposes a sanctioned local-image
+      provider or when Storage (Phase 5) routes photos through a URL
+      the sandbox permits. Documented in SPEC §7 item 6.
 
 **Verification:** Manual.
 
@@ -266,18 +343,18 @@ no auto-publish.
 
 **Description:** `MapView.qml` — Qt Location's `osm` plugin renders OSM
 tiles at low zoom (max z=9, no street-name detail); click drops a pin
-and emits `pinned(geohash, lat, lon)`. SPEC §7.10 was rewritten to
-carry an explicit, temporary carve-out for OSM tiles as the sole
-permitted external data source for v0; long-term direction is tile
-distribution over Logos Storage as a separate prototype project.
+and emits `pinned(geohash, lat, lon)`. SPEC §7 item 11 carries an
+explicit, temporary carve-out for OSM tiles as the sole permitted
+external data source for v0; long-term direction is tile distribution
+over Logos Storage as a separate prototype project.
 
 **Acceptance criteria:**
 - [x] Click on map → `geohash` string returned to caller
 - [x] ~~Tile source is fully offline / bundled (no third-party API)~~
       **Deviated:** OSM tile servers, capped at z=9. Carved out
-      explicitly in SPEC §7.10. README privacy section flags that
-      map browse leaks IP + viewed region to OSMF, in contrast to
-      the anonymous submission pipeline.
+      explicitly in SPEC §7 item 11. README privacy section flags
+      that map browse leaks IP + viewed region to OSMF, in contrast
+      to the anonymous submission pipeline.
 - [x] Precision is exactly 8 characters
 
 **Bonus shipped:** lat/lon readout with copy-to-clipboard so users can

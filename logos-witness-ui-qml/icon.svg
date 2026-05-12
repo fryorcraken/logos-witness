@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <title>Logos Witness</title>
+  <desc>Eye fused with map-pin: witness + place-anchored capture.</desc>
+
+  <!-- Pin teardrop: tip at bottom, bulb centered on the eye.
+       Path inset by ~6px so the white contour has room inside the viewBox. -->
+  <path d="M 64 116
+           C 64 116, 28 78, 28 52
+           A 36 36 0 1 1 100 52
+           C 100 78, 64 116, 64 116 Z"
+        fill="#1e2530"
+        stroke="#f4f4f0"
+        stroke-width="7"
+        stroke-linejoin="round"
+        stroke-linecap="round"/>
+
+  <!-- Eye almond, sitting inside the pin bulb -->
+  <path d="M 30 52
+           Q 64 28, 98 52
+           Q 64 76, 30 52 Z"
+        fill="#f4f4f0"
+        stroke="#0b0f14"
+        stroke-width="2.5"
+        stroke-linejoin="round"/>
+
+  <!-- Iris -->
+  <circle cx="64" cy="52" r="13" fill="#3a7d5c" stroke="#0b0f14" stroke-width="2"/>
+
+  <!-- Pupil -->
+  <circle cx="64" cy="52" r="5.5" fill="#0b0f14"/>
+
+  <!-- Catchlight -->
+  <circle cx="68" cy="48" r="2" fill="#f4f4f0"/>
+</svg>

@@ -1,6 +1,6 @@
 import QtQuick 2.15
 import QtTest 1.15
-import "../SubmitHelpers.js" as SubmitHelpers
+import "../qml/SubmitHelpers.js" as SubmitHelpers
 
 // Phase 3.3: timestamp + arg-marshalling helpers consumed by SubmitDialog.
 // These are pure JS so they're cheap to test with qmltestrunner without

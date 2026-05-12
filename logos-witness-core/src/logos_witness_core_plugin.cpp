@@ -42,10 +42,13 @@ LogosWitnessCorePlugin::LogosWitnessCorePlugin(QObject* parent)
 LogosWitnessCorePlugin::~LogosWitnessCorePlugin() = default;
 
 void LogosWitnessCorePlugin::initLogos(LogosAPI* logosAPIInstance) {
-    if (logos) { delete logos; logos = nullptr; }
-    if (logosAPI) { delete logosAPI; logosAPI = nullptr; }
+    // Assign the global `logosAPI` from liblogos. The framework wires the
+    // QRemoteObjects registry/socket off this assignment — do NOT free or
+    // overwrite an existing instance, the older code did and it killed the
+    // registry host so the UI module's callModule() could never connect.
     logosAPI = logosAPIInstance;
-    if (logosAPI) { logos = new LogosModules(logosAPI); }
+    if (logos) { delete logos; }
+    logos = logosAPI ? new LogosModules(logosAPI) : nullptr;
 }
 
 QVariantMap LogosWitnessCorePlugin::submitPhoto(const QString& filePath,

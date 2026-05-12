@@ -2,9 +2,9 @@ import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 
-// Phase 2 skeleton. The full submit dialog + map + timeline land in
-// Phase 3. Today this verifies the lgx packages, basecamp loads it,
-// and the JS bridge can reach logos_witness_core.
+// Main UI entry point. Phases 3.1–3.3 ship the submit dialog (photo
+// picker + map-driven geohash + capture time + submit-against-stub-core);
+// the post-submit map+timeline of received references is Phase 3.4.
 
 Item {
     id: root
@@ -18,14 +18,14 @@ Item {
 
         Text {
             Layout.alignment: Qt.AlignHCenter
-            text: "Logos Witness — Phase 2 skeleton"
+            text: "Logos Witness"
             font.pixelSize: 18
             font.bold: true
         }
 
         Text {
             Layout.alignment: Qt.AlignHCenter
-            text: "Submit dialog is Phase 3.1 (picker + preview only).\nGeohash (3.2), timestamp confirm + submit (3.3), map/timeline (3.4) follow.\nCore module is the in-memory stub until Phases 4–7."
+            text: "Submit a place- and time-anchored photo, or ping the core to see what's been recorded so far.\nMap+timeline of received references lands in Phase 3.4; strip/Storage/Delivery/on-chain in 4–7."
             horizontalAlignment: Text.AlignHCenter
             color: "#666"
             font.pixelSize: 12
