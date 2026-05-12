@@ -11,8 +11,15 @@ bumped, vendored Qt6 QtLocation/QtPositioning imports, env-wedge launcher),
 3.1, 3.2, 3.3, 3.4 (map + timeline app shell + decode invokables + SPEC §2
 amendment locking decoders into the core surface).
 
-**Resume here:** Phase 3.5 — timeline scrubber wired to map filtering.
-That closes Phase 3 and the single-instance demo works end-to-end.
+**Re-opened:** 3.5 — first pass shipped a `RangeSlider` (two free
+handles, hard filter). Dogfooding surfaced both a reactivity bug
+(plain-JS array reads not re-evaluating) and, more importantly, that
+the design was thin. SPEC §11 now defines a proper time cursor:
+centered playhead, day/week/month/year scaling, opacity-graded markers,
+YouTube-style density curve. 3.5 below is rewritten against §11.
+
+**Resume here:** Phase 3.5 redux — implement SPEC §11 time cursor.
+Once that lands, Phase 3 checkpoint review + Phase 4 (strip pipeline).
 
 **Notable deviations from the original plan**, documented in commit history
 and reflected in the per-task checkboxes below:
@@ -487,15 +494,89 @@ entries; close and reopen, still 3.
 
 **Dependencies:** 3.3. **Scope:** M.
 
-### Task 3.5: Timeline scrubber wired to map filtering
+### Task 3.5: Time cursor (per SPEC §11) — REWRITE
 
-**Description:** Time-range scrubber filters the visible markers.
+**Description:** Replace the prior RangeSlider with a proper time cursor
+matching SPEC §11. The cursor occupies the bottom strip of the main
+window with: a centered playhead at `tm`, a day/week/month/year scale
+selector, a today shortcut, ‹/› half-window step buttons, drag-to-pan
+on the strip, opacity-graded map markers + timeline rows, and a
+density curve (histogrammed refs/bin) above the cursor line.
 
-**Acceptance criteria:** scrubbing updates marker visibility live.
+The prior `RangeSlider` implementation (handles, `filterByRange`,
+"Reset" button, `fromTs`/`toTs` properties) is removed in this same
+task. `TimelineModel.filterByRange` stays as a building block — the
+cursor's "show refs inside [t0, t1]" is exactly that, just driven by a
+midpoint+width derivation rather than two handles.
 
-**Verification:** Manual.
+**Acceptance criteria:**
+- [ ] `TimeCursor.qml` component renders along the bottom, full-width
+      minus the timeline rail. Scale row sits below the cursor line:
+      `[Day] [Week] [Month] [Year]` with one highlighted (default
+      `Year`); a `Today` shortcut and `‹` / `›` step buttons.
+- [ ] Midpoint `tm` is bindable; defaults to `now` on first load.
+      Switching scale recenters on current `tm` and updates `W`.
+- [ ] Dragging the cursor strip horizontally pans `tm` (1 px =
+      `W/stripWidthPx` seconds). `‹` / `›` step `tm` by `W/2`.
+      `Today` snaps `tm = now`. Bounds enforced per §11.6.
+- [ ] Refs outside `[t0, t1]` are hidden from both map and timeline
+      (drop existing visibility rules in `Main.qml`'s
+      `_rebuildBindings`). Counter shows `N of M refs`.
+- [ ] Each visible marker + timeline row gets opacity per
+      `TimelineModel.opacityFor(ts, tm, W)`: 1.0 at midpoint, 0.15 at
+      the edges, linear in between.
+- [ ] Density curve above the cursor line: area chart over
+      `binCounts(refs, t0, t1, binCount)`, auto-Y-scaled to the max bin.
+      Curve hides cleanly when every bin is zero.
+- [ ] `TimeCursor` emits `windowChanged(t0, t1)` on every
+      `tm`/`scalePreset` commit; `Main.qml`'s `_rebuildBindings`
+      consumes it (replacing the RangeSlider's `_scrubberMoved`).
+- [ ] Reactivity bug from the first 3.5 pass does not recur: the
+      cursor reads from explicit reactive properties on `Main.qml`
+      (`entryCount`, `storeMinTs`, `storeMaxTs`), not from
+      `store.entries.length` directly.
 
-**Dependencies:** 3.4. **Scope:** S.
+**Tests (qmltestrunner, in `TimelineModel.js`):**
+- `windowFromMidpoint(tm, scalePreset)` — preset widths, symmetric
+  window, reject unknown preset.
+- `binCounts(refs, t0, t1, binCount)` — empty input, `t1` inclusion,
+  half-open elsewhere, known-vector counts.
+- `opacityFor(ts, tm, W)` — midpoint=1.0, edges=0.15, linearity,
+  clamp for out-of-window inputs.
+- `clampMidpoint(tm, W, oldest, now)` — future-side and past-side
+  bounds, store-empty fallback.
+- Existing `filterByRange` tests stay — the cursor uses it; the
+  function survives the rewrite.
+
+**Files touched:**
+- `qml/TimeCursor.qml` — new component.
+- `qml/Main.qml` — drop scrubber Frame + `fromTs/toTs` props +
+  `_scrubberMoved`; mount `TimeCursor` instead; thread
+  `windowChanged` into `_rebuildBindings`; apply
+  `opacityFor` to timeline row + marker delegates.
+- `qml/MapView.qml` — accept an `opacity` field per marker entry and
+  bind the `markerDot.opacity` to it.
+- `qml/TimelineModel.js` — add `windowFromMidpoint`,
+  `binCounts`, `opacityFor`, `clampMidpoint`; keep `filterByRange`.
+- `tests/tst_timeline_model.qml` — new tests above; tests that
+  exercised "Reset button restores NaN" can be deleted.
+
+**Verification:** `qmltestrunner` green. Manual e2e: submit ≥ 3
+photos at different times spanning at least a few hours; confirm
+midpoint markers are opaque, edge markers faint, out-of-window
+absent. Switch scales; observe curve re-bin. Drag + step + Today
+all change `tm` without changing `W`.
+
+**Dependencies:** 3.4. **Scope:** M.
+
+**First pass (closed):** RangeSlider with two free handles +
+`filterByRange` + Reset. Shipped but did not survive design review or
+dogfood — see SPEC §11 for why a centered-playhead model replaces it.
+The pure-JS helpers from that pass (`filterByRange`, `storeTimeRange`)
+and the reactivity scaffolding (`entryCount`, `storeMinTs/MaxTs` on
+`Main.qml`) survive into the rewrite. The bundle-completeness CI gate
+fix (scan `qml/*.qml` rather than empty top-level glob) also stays —
+that bug was orthogonal.
 
 ### Checkpoint: Phase 3 done — demo-able single-instance app
 

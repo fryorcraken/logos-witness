@@ -525,3 +525,210 @@ the tagged commit, including the docs gate.
 - Exact "user-facing surface" globs used by the README docs gate (§9.7) —
   conservative default above is fine for v0 but may need pruning to avoid
   false positives on internal-only refactors.
+
+## 11. Time cursor
+
+The time cursor is the sole time-navigation control in the UI. It replaces the
+Phase 3.5 prototype `RangeSlider` entirely — that control was a discoverable
+but design-thin first pass; it does not ship. The cursor binds together three
+ideas: a centered playhead at "now I'm looking here", a configurable window
+width around it, and an at-a-glance distribution of how busy the rest of the
+world's contributions are around that moment.
+
+### 11.1 Anatomy
+
+Layout, bottom of the main window, spanning the full width minus the timeline
+rail. Top-to-bottom:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│   density curve (area chart, refs/bin)                          │  ← upper strip
+│                  ╱╲                                             │
+│             ╱╲  ╱  ╲   ╱╲                                       │
+│        ╱╲  ╱  ╲╱    ╲ ╱  ╲                                      │
+├─────────────────────────────┼───────────────────────────────────┤
+│ ●─────────────────────────●─┼─●─────────────────────────●       │  ← cursor line
+│ t0                          ▼                         t1        │
+│                          midpoint                               │
+│  [Day] [Week] [Month] [Year•]                  ‹ today ›        │  ← controls
+└─────────────────────────────────────────────────────────────────┘
+```
+
+- **Cursor line** — a horizontal axis from `t0` (left edge) to `t1` (right
+  edge). The midpoint `tm = t0 + (t1 - t0) / 2` is marked with a fixed
+  triangular indicator centered on the strip. Endpoint ticks label `t0` and
+  `t1` with short ISO labels (e.g. `2026-05-12`).
+- **Density curve** — area chart above the cursor line, computed over the
+  visible window only (§11.4).
+- **Scale buttons** — `Day`, `Week`, `Month`, `Year`. Exactly one is active;
+  switching presets re-centers the window on the current midpoint and resets
+  width per §11.3.
+- **Today shortcut** — a single button that snaps the midpoint back to `now`
+  without changing the scale.
+
+### 11.2 Window model
+
+The cursor holds two state variables:
+
+- `tm` (midpoint, unix seconds) — what the user is "looking at".
+- `W`  (window width, seconds) — fully determined by the active scale preset.
+
+Derived: `t0 = tm - W/2`, `t1 = tm + W/2`. The window is always symmetric
+around the midpoint; the user never sets `t0` or `t1` directly.
+
+This differs from the rejected RangeSlider model (two free handles) on
+purpose: the symmetric-around-midpoint constraint makes scrolling and scaling
+compositional, and matches the "playhead" mental model of the YouTube
+heatmap analogue the user requested.
+
+### 11.3 Scale presets
+
+| Preset | Width `W`     | Notes                                |
+|--------|---------------|--------------------------------------|
+| Day    | 86 400 s      | 24 h                                 |
+| Week   | 604 800 s     | 7 days                               |
+| Month  | 2 592 000 s   | 30 days (fixed; not calendar-aligned)|
+| Year   | 31 536 000 s  | 365 days (fixed; not calendar-aligned, default) |
+
+`Year` is the default on first launch because v0 contribution density is
+expected to be sparse — a wider initial window maximises the chance the user
+sees something.
+
+Calendar alignment is deliberately rejected for v0. Fixed widths keep the
+scrolling math trivial (`tm += W/2` for a half-window step) and the cursor
+behaviour identical across DST transitions and month-length variation. A
+future preset like `Custom` or calendar-aligned `This month` is a v1
+decision; it requires a SPEC amendment.
+
+### 11.4 Density curve
+
+The curve over the strip is a histogram of references in `[t0, t1]`, binned
+across the curve's pixel width. It is recomputed on every change to `tm`,
+`W`, or the underlying store.
+
+- **Bins**: `N = floor(curveWidthPx / 4)`, clamped to `[16, 256]`. One bar
+  per ~4 px is dense enough to look continuous after the area fill and cheap
+  enough to recompute on every scroll frame at v0 scale.
+- **Counts**: number of refs whose `timestamp` falls in the half-open
+  interval `[bin_start, bin_end)`. The last bin is closed on both ends so
+  exactly-at-`t1` refs are included.
+- **Render**: filled area chart; the curve's vertical axis is auto-scaled to
+  the max bin count in the visible window (so the curve always reaches the
+  top of the strip when there's at least one ref). No grid lines, no
+  numeric Y axis; this is a glanceable indicator, not a chart.
+- **Empty window**: when every bin is zero, render no curve (just the cursor
+  line below it). Do not render a flat baseline — empty looks empty.
+
+The histogram is computed over the in-memory store the same way as the
+timeline list and map markers — single source of data. As Phase 7 (chain
+historical scan) lands, that store grows; the curve picks up the new
+density automatically.
+
+### 11.5 Marker opacity gradient
+
+Every visible map marker and every visible timeline row carries an opacity
+derived from its timestamp's distance to the midpoint:
+
+```
+d = |timestamp - tm| / (W / 2)           # 0 at midpoint, 1 at the edge
+opacity = 1.0 - d * (1.0 - opacityMin)
+opacityMin = 0.15                         # marker at t0 or t1
+```
+
+- `opacity = 1.0` at the exact midpoint.
+- `opacity = 0.15` at the edges `t0` and `t1`.
+- Linear in between. No easing function in v0; if the curve looks
+  too harsh in practice, a cosine ease is a follow-up that does not
+  touch the contract.
+
+Refs whose timestamp falls outside `[t0, t1]` are hidden entirely — not
+rendered on the map, not present in the timeline rail, not counted in the
+density curve. The timeline counter shows `N of M refs` whenever `N < M`.
+
+The opacity gradient applies uniformly to map markers and timeline-row
+content. Hit-testing follows opacity: a marker at `opacity = 0.15` is still
+clickable (basecamp's `MouseArea` doesn't gate on alpha), but its click
+hitbox is the same size as a full-opacity marker. We do not shrink markers
+at the edges in v0 — the opacity ramp is the visual signal.
+
+### 11.6 Scrolling
+
+Two input methods, both maintain the invariant that scrolling pans `tm`
+without changing `W`:
+
+- **Drag the cursor strip horizontally.** Click-and-hold anywhere in the
+  cursor strip (curve area or axis), then drag. One pixel of horizontal
+  drag = `W / stripWidthPx` seconds of pan. Releasing the drag freezes the
+  new `tm`.
+- **Step buttons.** A pair of `‹` / `›` buttons on the right of the scale
+  row pan `tm` by `W / 2` (half the visible window) per click. Keeps a
+  ~50% overlap with the previous view so the user can read across
+  consecutive windows without losing context.
+
+Mouse-wheel over the strip is **not** wired in v0 — the basecamp host's
+QML build has flaky `WheelEvent` semantics under the sandboxed
+`QNetworkAccessManager`, and the drag + step buttons cover the use case.
+The wheel is a v1 question.
+
+`tm` is bounded: it may never go more than `W/2` past `now` (no scrolling
+"into the future" beyond the right edge of the current window). The
+earliest bound is `tm = oldestRefTimestamp - W/2` — one full window past
+the oldest ref, so the user can see "the oldest ref is here" with empty
+space to its left. Step / drag clamp to these bounds.
+
+### 11.7 Component contract (`TimeCursor.qml`)
+
+The cursor is a reusable QML component imported by `Main.qml`. It owns its
+own `tm` and `scalePreset` state and emits a single `windowChanged(t0,
+t1)` signal whenever either changes.
+
+Properties:
+
+- `property var refs` — array of `{timestamp, ...}` objects; the cursor
+  reads only `timestamp`. Driven by the same store `Main.qml` feeds the
+  map and timeline.
+- `property real tm` — midpoint, bindable two-way.
+- `property string scalePreset` — one of `"day"`, `"week"`, `"month"`,
+  `"year"`.
+- `readonly property real t0`, `readonly property real t1` — derived.
+- `readonly property int binCount`, `readonly property var bins` — the
+  histogram (exposed for testability).
+
+Signals:
+
+- `windowChanged(real t0, real t1)` — emitted after every commit of `tm`
+  or `scalePreset`.
+
+`Main.qml` connects `windowChanged` to its existing `_rebuildBindings`
+path, replacing the RangeSlider's `_scrubberMoved` callback. The opacity
+formula in §11.5 lives in `TimelineModel.js` (`opacityFor(ts, tm, W)`) so
+qmltest exercises it without standing up the cursor component.
+
+### 11.8 Test coverage
+
+Pure-JS in `TimelineModel.js`, exercised under `qmltestrunner`:
+
+- `windowFromMidpoint(tm, scalePreset) → {t0, t1}` — symmetric window,
+  preset width lookup, rejection of unknown presets.
+- `binCounts(refs, t0, t1, binCount) → [int]` — empty array on zero refs,
+  edge inclusion on `t1`, half-open elsewhere, correct counts under known
+  vectors.
+- `opacityFor(ts, tm, W) → real` — 1.0 at midpoint, 0.15 at edges, linear
+  in between, clamped to `[0, 1]` for out-of-window safety.
+- `clampMidpoint(tm, W, oldest, now) → real` — enforces the §11.6 bounds.
+
+Manual e2e (basecamp): submit refs at deliberately spread-out timestamps
+(min 3), confirm midpoint markers are opaque, edge markers are faint,
+out-of-window markers are absent; scroll left/right with both drag and
+step buttons; switch scales and observe the curve re-bin live.
+
+### 11.9 Out of scope (v0, deferred)
+
+- Keyboard navigation (Arrow keys, Home/End).
+- Touch / pinch-to-zoom on the strip.
+- Mouse-wheel scrolling (see §11.6).
+- Calendar-aligned presets, custom-width entry.
+- Persisting `tm` / `scalePreset` across UI plugin reloads (in-memory only
+  in v0; Phase 5+ may revisit when the store itself becomes durable).
+- Marker grouping / clustering when density is high (curve already
+  communicates "lots happened here"; clustering is a v1 affordance).

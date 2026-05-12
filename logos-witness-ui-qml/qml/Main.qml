@@ -8,6 +8,10 @@ import "TimelineModel.js" as TM
 // on init and refreshed after every successful local submit (single-
 // instance demo). Cross-instance live feed lands in Phase 6 when Delivery
 // is wired; until then the only producer of refs is local submission.
+//
+// Phase 3.5: a RangeSlider scrubber along the bottom filters both the
+// timeline list and the map markers by [fromTs, toTs]. NaN bounds mean
+// "no filter"; the slider snaps to the store's oldest/newest timestamps.
 
 Item {
     id: root
@@ -24,6 +28,22 @@ Item {
     // on the MapView (which uses a `var`-typed property).
     ListModel { id: timelineEntries }
     property var markers: []
+
+    // Reactive mirrors of `store` for QML bindings. `store.entries` is a
+    // plain JS array mutated in place by TimelineModel.js; bindings that
+    // read it directly never re-evaluate. _rebuildBindings keeps these in
+    // sync after every seed/merge so the scrubber, counters, and slider
+    // bounds update when refs arrive.
+    property int  entryCount: 0
+    property real storeMinTs: NaN
+    property real storeMaxTs: NaN
+
+    // Phase 3.5 scrubber state. `fromTs`/`toTs` are the active filter; both
+    // NaN means "no filter" (scrubber hidden or at full extent). The slider
+    // pushes new values in here, and `_rebuildBindings` re-derives the
+    // visible markers/timeline from the current store + window.
+    property real fromTs: NaN
+    property real toTs: NaN
 
     // Detail popup state. Set when the user clicks a marker or row.
     property var selectedRef: null
@@ -87,8 +107,16 @@ Item {
                     Layout.fillWidth: true
                 }
                 Label {
-                    text: timelineEntries.count + " ref"
-                          + (timelineEntries.count === 1 ? "" : "s")
+                    // "5 refs" when no filter active, "3 of 5 refs" when
+                    // the scrubber has narrowed the visible set.
+                    text: {
+                        var total = root.entryCount
+                        var shown = timelineEntries.count
+                        if (shown === total) {
+                            return total + " ref" + (total === 1 ? "" : "s")
+                        }
+                        return shown + " of " + total + " refs"
+                    }
                     color: "#666"
                     font.pixelSize: 11
                 }
@@ -127,7 +155,9 @@ Item {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 horizontalAlignment: Text.AlignHCenter
-                text: "No references yet. Click Submit photo… to add one."
+                text: root.entryCount === 0
+                      ? "No references yet. Click Submit photo… to add one."
+                      : "No references in the selected time range."
                 color: "#888"
                 font.pixelSize: 11
             }
@@ -137,12 +167,96 @@ Item {
     // Floating Submit button. Bottom-left so it doesn't fight the
     // timeline rail.
     Button {
+        id: submitButton
         text: "Submit photo…"
         anchors.left: parent.left
         anchors.bottom: parent.bottom
         anchors.margins: 16
         highlighted: true
         onClicked: submitDialog.open()
+    }
+
+    // Phase 3.5 time-range scrubber. A two-handle RangeSlider whose extents
+    // mirror the store's oldest/newest timestamp; the live values drive the
+    // filter window in `_rebuildBindings`. Hidden when the store has fewer
+    // than two refs — there's nothing to scrub across.
+    Frame {
+        id: scrubberFrame
+        visible: root.entryCount >= 2
+        anchors.left: submitButton.right
+        anchors.right: timelineFrame.left
+        anchors.bottom: parent.bottom
+        anchors.leftMargin: 16
+        anchors.rightMargin: 12
+        anchors.bottomMargin: 16
+        padding: 8
+        background: Rectangle {
+            color: "#fafafa"
+            border.color: "#ccc"
+            radius: 4
+            opacity: 0.95
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 2
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Label {
+                    text: "Time range"
+                    font.bold: true
+                    font.pixelSize: 11
+                }
+                Label {
+                    Layout.fillWidth: true
+                    horizontalAlignment: Text.AlignHCenter
+                    text: isFinite(root.fromTs) && isFinite(root.toTs)
+                          ? (TM.formatTimestamp(root.fromTs) + "   →   "
+                             + TM.formatTimestamp(root.toTs))
+                          : ""
+                    font.family: "monospace"
+                    font.pixelSize: 11
+                    color: "#333"
+                }
+                Button {
+                    text: "Reset"
+                    font.pixelSize: 10
+                    padding: 2
+                    enabled: scrubber.first.value > scrubber.from
+                             || scrubber.second.value < scrubber.to
+                    onClicked: {
+                        scrubber.first.value  = scrubber.from
+                        scrubber.second.value = scrubber.to
+                        root.fromTs = NaN
+                        root.toTs   = NaN
+                        root._rebuildBindings()
+                    }
+                }
+            }
+
+            RangeSlider {
+                id: scrubber
+                Layout.fillWidth: true
+                // Bounds widen by 1 s when extents collapse to a point so
+                // RangeSlider doesn't reject identical from/to values; the
+                // visible filter is still the real extent. Reads the
+                // reactive root.storeMin/MaxTs (refreshed by _rebuildBindings).
+                from: isFinite(root.storeMinTs) ? root.storeMinTs : 0
+                to: {
+                    if (!isFinite(root.storeMaxTs)) return 1
+                    return root.storeMaxTs > root.storeMinTs
+                           ? root.storeMaxTs : root.storeMinTs + 1
+                }
+                first.value: from
+                second.value: to
+                snapMode: RangeSlider.NoSnap
+                stepSize: 1   // unix seconds — finer granularity is pointless
+                first.onMoved: root._scrubberMoved()
+                second.onMoved: root._scrubberMoved()
+            }
+        }
     }
 
     SubmitDialog {
@@ -219,16 +333,26 @@ Item {
         }
     }
 
-    // Recompute the ListModel + markers array from the JS store. Two
-    // separate output shapes because:
+    // Recompute the ListModel + markers array from the JS store, applying
+    // the active scrubber window (root.fromTs / root.toTs; NaN means no
+    // constraint). Two separate output shapes because:
     //   - ListView wants a ListModel for delegate binding
     //   - MapItemView (in MapView.qml) wants a plain JS array for `var`
     //     property assignment to trip a binding update
     function _rebuildBindings() {
+        // Refresh reactive mirrors first so the scrubber's `from`/`to`
+        // bindings see the new extents before the slider is queried.
+        var range = TM.storeTimeRange(root.store)
+        root.entryCount = root.store.entries.length
+        root.storeMinTs = range ? range.min : NaN
+        root.storeMaxTs = range ? range.max : NaN
+
+        var visible = TM.filterByRange(root.store.entries,
+                                       root.fromTs, root.toTs)
         timelineEntries.clear()
         var newMarkers = []
-        for (var i = 0; i < root.store.entries.length; i++) {
-            var e = root.store.entries[i]
+        for (var i = 0; i < visible.length; i++) {
+            var e = visible[i]
             timelineEntries.append({
                 content_hash: String(e.content_hash),
                 timestamp:    Number(e.timestamp),
@@ -246,6 +370,14 @@ Item {
             }
         }
         root.markers = newMarkers
+    }
+
+    // Slider drag callback. Pulls the live handle values into
+    // `fromTs`/`toTs` and re-derives bindings. Called from both handles.
+    function _scrubberMoved() {
+        root.fromTs = scrubber.first.value
+        root.toTs   = scrubber.second.value
+        _rebuildBindings()
     }
 
     // Call into the core's decodeGeohash invokable. Returns

@@ -84,4 +84,65 @@ TestCase {
         compare(TM.shortHash(""), "")
         compare(TM.shortHash(null), "")
     }
+
+    // ---- Phase 3.5: scrubber range + filter ------------------------------
+
+    function test_storeTimeRange_empty_returns_null() {
+        var s = TM.makeStore()
+        verify(TM.storeTimeRange(s) === null)
+        verify(TM.storeTimeRange(null) === null)
+    }
+
+    function test_storeTimeRange_uses_endpoints() {
+        var s = TM.makeStore()
+        TM.seedFromList(s, [
+            mkRef("aa", 100),
+            mkRef("bb", 300),
+            mkRef("cc", 200)
+        ])
+        var r = TM.storeTimeRange(s)
+        compare(r.min, 100)
+        compare(r.max, 300)
+    }
+
+    function test_filterByRange_inclusive_bounds() {
+        var entries = [
+            mkRef("aa", 100),
+            mkRef("bb", 200),
+            mkRef("cc", 300)
+        ]
+        // Both bounds hit a sample exactly; both must be included.
+        var out = TM.filterByRange(entries, 100, 300)
+        compare(out.length, 3)
+        out = TM.filterByRange(entries, 150, 250)
+        compare(out.length, 1)
+        compare(out[0].content_hash, "bb")
+    }
+
+    function test_filterByRange_no_match() {
+        var entries = [mkRef("aa", 100), mkRef("bb", 200)]
+        var out = TM.filterByRange(entries, 500, 600)
+        compare(out.length, 0)
+    }
+
+    function test_filterByRange_open_ended() {
+        var entries = [mkRef("aa", 100), mkRef("bb", 200), mkRef("cc", 300)]
+        // NaN/undefined on one side means "no constraint there".
+        var out = TM.filterByRange(entries, NaN, 200)
+        compare(out.length, 2)
+        out = TM.filterByRange(entries, 200, NaN)
+        compare(out.length, 2)
+        out = TM.filterByRange(entries, NaN, NaN)
+        compare(out.length, 3)
+    }
+
+    function test_filterByRange_skips_invalid_timestamps() {
+        var entries = [
+            mkRef("aa", 100),
+            { schema_version: 1, content_hash: "bad", timestamp: "nope", geohash: "u" },
+            mkRef("cc", 300)
+        ]
+        var out = TM.filterByRange(entries, 0, 1000)
+        compare(out.length, 2, "the bogus-ts entry is silently dropped")
+    }
 }

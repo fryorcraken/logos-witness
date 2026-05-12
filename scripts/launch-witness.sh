@@ -56,15 +56,19 @@ sed '$d' "$WRAPPER" > "$TRIMMED_WRAPPER"
 . "$TRIMMED_WRAPPER"
 
 # 4. Compute QtLocation/QtPositioning paths from the basecamp nixpkgs pin
-#    via flake metadata. Fall back to a small lookup if jq isn't around.
-NIXPKGS_REV="$(awk '/"rev":/ {print $2; exit}' /tmp/lb-bc/flake.lock 2>/dev/null \
-              | tr -d '",' || true)"
-if [ -z "${NIXPKGS_REV:-}" ]; then
-    # Re-fetch basecamp source to read its flake.lock if /tmp copy missing.
+#    via flake metadata. We need the nixpkgs node specifically — the older
+#    awk-grabs-first-rev trick was buggy because the first "rev" in the
+#    basecamp lock is logos-capability-module, not nixpkgs. Pin to the
+#    nixpkgs node via python's json parser (always available on this host).
+BC_LOCK=""
+if [ -f /tmp/lb-bc/flake.lock ]; then
+    BC_LOCK=/tmp/lb-bc/flake.lock
+else
     rm -rf /tmp/lb-bc-launch
     git clone --depth 1 https://github.com/logos-co/logos-basecamp /tmp/lb-bc-launch >&2 2>&1
-    NIXPKGS_REV="$(python3 -c 'import json,sys; print(json.load(open("/tmp/lb-bc-launch/flake.lock"))["nodes"]["nixpkgs"]["locked"]["rev"])')"
+    BC_LOCK=/tmp/lb-bc-launch/flake.lock
 fi
+NIXPKGS_REV="$(python3 -c "import json,sys; print(json.load(open('$BC_LOCK'))['nodes']['nixpkgs']['locked']['rev'])")"
 
 # Honor pre-set QTLOC_STORE / QTPOS_STORE so callers without network/build
 # permissions (CI, sandboxed shells) can supply already-built store paths

@@ -69,3 +69,36 @@ function shortHash(hashHex) {
     if (!hashHex) return "";
     return String(hashHex).slice(0, 8);
 }
+
+// Min/max timestamp across the store, in unix seconds. Returns null when
+// the store is empty so callers can hide the scrubber rather than render
+// a degenerate range. Phase 3.5: drives the RangeSlider bounds.
+function storeTimeRange(store) {
+    if (!store || !store.entries || store.entries.length === 0) return null;
+    // entries are sorted ts-desc, so the extremes are the endpoints.
+    var newest = Number(store.entries[0].timestamp);
+    var oldest = Number(store.entries[store.entries.length - 1].timestamp);
+    if (!isFinite(newest) || !isFinite(oldest)) return null;
+    return { min: oldest, max: newest };
+}
+
+// Filter entries to those with `fromTs <= timestamp <= toTs`. Inclusive on
+// both ends so the scrubber at full extent shows everything. A non-finite
+// bound is treated as "no constraint on that side".
+function filterByRange(entries, fromTs, toTs) {
+    if (!entries) return [];
+    var lo = Number(fromTs);
+    var hi = Number(toTs);
+    var loActive = isFinite(lo);
+    var hiActive = isFinite(hi);
+    if (!loActive && !hiActive) return entries.slice();
+    var out = [];
+    for (var i = 0; i < entries.length; i++) {
+        var ts = Number(entries[i].timestamp);
+        if (!isFinite(ts)) continue;
+        if (loActive && ts < lo) continue;
+        if (hiActive && ts > hi) continue;
+        out.push(entries[i]);
+    }
+    return out;
+}

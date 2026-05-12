@@ -91,14 +91,15 @@ jobs:
         working-directory: logos-witness-ui-qml
         run: |
           set -eu
-          # Catch the failure mode where a new top-level *.qml is added but
+          # Catch the failure mode where a new qml/ *.qml is added but
           # not git-tracked: the flake `src = ./.;` then silently drops it
-          # and basecamp loads a UI without the new component. The lgx
-          # builder uses `find -maxdepth 1`, so only top-level *.qml files
-          # are bundled — exclude subdirs (tests/, etc.) which are
-          # legitimately tracked but not meant for the bundle.
-          tracked=$(git ls-files '*.qml' | grep -v '/' | sort)
-          bundled=$(tar tf result/*.lgx | grep -E '\.qml$' | xargs -n1 basename | sort -u)
+          # and basecamp loads a UI without the new component. Post-2.2
+          # the view directory is qml/ (metadata.json → "view: qml/Main.qml")
+          # and the module builder copies that directory wholesale into the
+          # bundle. Exclude tests/ and the vendored Qt subtrees under qml/
+          # — only top-level qml/*.qml is meant for direct view loading.
+          tracked=$(git ls-files 'qml/*.qml' | awk -F/ 'NF==2' | xargs -n1 basename | sort)
+          bundled=$(tar tf result/*.lgx | grep -E 'qml/[^/]+\.qml$' | xargs -n1 basename | sort -u)
           echo "Tracked QML: $tracked"
           echo "Bundled QML: $bundled"
           diff <(echo "$tracked") <(echo "$bundled")
