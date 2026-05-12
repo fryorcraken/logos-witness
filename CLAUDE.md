@@ -40,3 +40,31 @@ to discover a red main on their own.
   prompt: destructive operations (force-push, `git reset --hard` on
   shared refs, branch deletes, hook bypasses) still require explicit
   per-action authorization.
+
+## Hand-off to a new agent
+
+When the user opens a fresh session ("resume the work"), an agent should
+self-orient in this order:
+
+1. Read `SPEC.md` end-to-end — it's the authoritative contract.
+2. Read `PLAN.md` "Status" block at the top — names the current phase,
+   what's done, what's re-opened, and where to resume.
+3. Skim recent `git log` to see what's already committed vs. only
+   discussed.
+
+The user does **not** review every commit. They lean on CI for
+correctness gates and on PLAN.md status for "what's actually shipped vs.
+on-disk prototype." Before asking for a review, surface anything in the
+diff that is intentional throw-away code so the user doesn't waste time
+reviewing it.
+
+Throw-away signals to call out explicitly:
+
+- A task marked "REWRITE" or "re-opened" in PLAN.md — the on-disk code
+  is a baseline the next pass replaces; review it only for survivors
+  (helper functions, tests, config) that the rewrite reuses.
+- A commit message that explicitly flags "next agent rewrites this"
+  (e.g. commit e0a806b for Phase 3.5).
+
+When in doubt, list the commits since the user's last touchpoint and
+flag which ones are review-worthy vs. discardable scaffolding.

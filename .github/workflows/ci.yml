@@ -131,10 +131,16 @@ jobs:
         working-directory: logos-witness-core
         run: ./lm-tool/bin/lm methods result-lib/lib/logos_witness_core_plugin.so
 
-      - name: ctest — protobuf reference codec round-trip
+      - name: ctest — core unit tests
         working-directory: logos-witness-core
         run: |
+          # Build each test target explicitly. We can't use `all` because
+          # the plugin target needs `logos_sdk.h` which only resolves in
+          # the lgx-flake build env, not a raw `nix develop` shell. New
+          # ctest binaries must be appended to this target list as they
+          # land — Phase 3.4 added test_geohash and the omission silently
+          # broke CI for two commits until caught here.
           nix develop --command bash -c '
             cmake -B build -GNinja \
-              && cmake --build build --target test_reference_codec \
+              && cmake --build build --target test_reference_codec test_geohash \
               && ctest --test-dir build --output-on-failure'
