@@ -21,6 +21,24 @@ YouTube-style density curve. 3.5 below is rewritten against §11.
 **Resume here:** Phase 3.5 redux — implement SPEC §11 time cursor.
 Once that lands, Phase 3 checkpoint review + Phase 4 (strip pipeline).
 
+**Pending user review** (defer until the rewrite below lands; reviewing
+intermediate scaffolding wastes the user's time):
+
+- `e0a806b spec(ui): redesign Phase 3.5 time scrubber as a centered-
+  playhead time cursor` — the *spec* (SPEC §11) is review-worthy now.
+  The *code* changes in that commit (`Main.qml`, `TimelineModel.js`,
+  `tests/tst_timeline_model.qml`) are throw-away scaffolding the §11
+  rewrite replaces; review them only *after* the rewrite, and only for
+  the helpers/tests/CI-fix that survive (called out in 3.5's "First
+  pass (closed)" footer).
+- `b0d874e ci+docs: fix red main from missing test_geohash target;
+  expand CLAUDE.md` — orthogonal CI fix + agent-workflow doc; safe to
+  review independently.
+
+When the 3.5 rewrite commit lands, append it here as the third item
+and tell the user "ready for review of e0a806b + the rewrite together"
+— review-batching keeps the user out of intermediate states.
+
 **Notable deviations from the original plan**, documented in commit history
 and reflected in the per-task checkboxes below:
 - 3.1 acceptance criterion "image renders" is technically NOT met under
