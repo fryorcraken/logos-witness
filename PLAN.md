@@ -13,14 +13,22 @@ amendment locking decoders into the core surface), 3.5 (TimeCursor per
 SPEC §11 — centered playhead, day/week/month/year scales, drag-to-pan +
 ‹/›/Today step buttons, density curve, opacity ramp on visible markers
 + rows; dogfooded twice, code-reviewed once, see "Dogfood findings"
-below).
+below), 4.1 (`exif_strip` via libjpeg-turbo coefficient copy — drops
+APP1/APP2/APP13/APP14/APPn/COM markers wholesale, byte-identical decoded
+pixels, fails closed on truncation; six committed fixtures regenerated
+via `tests/fixtures/generate.sh`; stripped outputs land in
+`build/stripped/` ready for 4.2's exiftool gate).
 
-**Resume here:** Phase 4 (strip pipeline — Task 4.1 `exif_strip`
-implementation). Phase 3 checkpoint is *de facto* done: 3.5 has been
-dogfooded twice on alice profile and the cursor + submit flow are
-behaviorally correct. The README quickstart + screenshots checkbox in
-the Phase 3 checkpoint is still empty — pick that up either before or
-alongside 4.1, not blocking.
+**Resume here:** Phase 4.2 (CMake `exiftool` residual-metadata gate).
+The strip itself is in place; 4.2 wires `exiftool -a` over every file
+in `build/stripped/` and fails ctest on any identifying tag. Needs
+exiftool added to the dev shell (currently not in the flake's
+`nativeBuildInputs`) and a CI step that calls the gate. After 4.2 lands,
+Task 4.3 wires strip into `submitPhoto`.
+
+The README quickstart + screenshots checkbox in the Phase 3 checkpoint
+is still empty — pick that up either before or alongside 4.2/4.3, not
+blocking.
 
 **Pending user review** is now empty. The original three-commit batch
 (`e0a806b` SPEC §11 + `d3cfb22` cursor rewrite + `b0d874e` CI fix) was
@@ -680,14 +688,28 @@ buffer and returning a stripped byte buffer. Rebuild the JPEG via libjpeg
 thumbnails survive.
 
 **Acceptance criteria:**
-- [ ] Strips EXIF, XMP, ICC profile, maker-notes, embedded thumbnail
-- [ ] Pixel content visually identical (byte-equal SHA-256 over decoded
+- [x] Strips EXIF, XMP, ICC profile, maker-notes, embedded thumbnail
+- [x] Pixel content visually identical (byte-equal SHA-256 over decoded
       pixels)
-- [ ] Fail-closed: malformed input returns an error, not partial output
+- [x] Fail-closed: malformed input returns an error, not partial output
 
 **Verification:** Unit-test fixtures cover EXIF-rich, XMP-rich, ICC-tagged,
 embedded-thumbnail, maker-notes variants. `exiftool -a -G1` on every
 output reports nothing identifying.
+
+**Note (2026-05-13):** Implemented via libjpeg-turbo `jpeg_read_coefficients`
+→ `jpeg_write_coefficients` so decoded pixels stay byte-identical to
+input (no recompression). Marker drop is implicit: by NOT calling
+`jpeg_save_markers`, every APPn (n != 0) and COM segment is discarded
+at read time. The JFIF APP0 is forced on write for structural
+compatibility — it carries no identifying data. The maker-notes fixture
+collapsed into `exif_rich.jpg` (IFD-internal Make/Model is the same APP1
+segment; a separate maker-note APP would be a synthetic non-test).
+`jfif_comment.jpg` was added in its place covering JPEG COM + APP13
+(Photoshop IRB / IPTC). Fail-closed on truncation needed an explicit
+`emit_message` hook because libjpeg silently substitutes zeros for
+missing data segments via `msg_level < 0` warnings rather than calling
+`error_exit`.
 
 **Dependencies:** 1.3. **Files:** `lib/exif_strip.{h,cpp}`,
 `tests/fixtures/*.jpg`, `tests/test_exif_strip.cpp`. **Scope:** M.

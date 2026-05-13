@@ -142,5 +142,5 @@ jobs:
           # broke CI for two commits until caught here.
           nix develop --command bash -c '
             cmake -B build -GNinja \
-              && cmake --build build --target test_reference_codec test_geohash \
+              && cmake --build build --target test_reference_codec test_geohash test_exif_strip \
               && ctest --test-dir build --output-on-failure'
