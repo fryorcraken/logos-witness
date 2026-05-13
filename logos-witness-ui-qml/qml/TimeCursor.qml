@@ -58,7 +58,7 @@ Item {
 
     signal windowChanged(real t0, real t1)
 
-    implicitHeight: 110
+    implicitHeight: 130
 
     // ---- Internals ------------------------------------------------------
 
@@ -130,11 +130,13 @@ Item {
         anchors.fill: parent
         spacing: 4
 
-        // Cursor strip: density curve above, axis with playhead below.
+        // Cursor strip: density curve above, axis with two-line tick
+        // labels below. Height accounts for: 44 px curve canvas (top),
+        // ~46 px axis row with playhead + two-line labels (bottom).
         Item {
             id: cursorStrip
             Layout.fillWidth: true
-            Layout.preferredHeight: 70
+            Layout.preferredHeight: 90
 
             // Density-curve area chart. Auto-Y-scaled to the max bin in the
             // current window. Empty window → blank.
@@ -176,19 +178,23 @@ Item {
                 }
             }
 
-            // Axis line + endpoint labels + centered playhead.
+            // Axis line + endpoint labels + centered playhead. Height
+            // sized for two-line labels (ISO + relative phrase) below the
+            // axis line; the axis line itself sits at the top of the row
+            // so both label lines fit beneath it.
             Item {
                 id: axisRow
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
-                height: 26
+                height: 46
 
                 Rectangle {
                     id: axisLine
                     anchors.left: parent.left
                     anchors.right: parent.right
-                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.top: parent.top
+                    anchors.topMargin: 8
                     height: 1
                     color: "#888"
                 }
