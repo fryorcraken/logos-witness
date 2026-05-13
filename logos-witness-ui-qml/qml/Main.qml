@@ -76,6 +76,10 @@ Item {
         anchors.fill: parent
         pickable: false
         markers: root.markers
+        cursorT0: root.winT0
+        cursorT1: root.winT1
+        cursorTm: root.winTm
+        cursorW:  root.winW
         onMarkerClicked: function (contentHash) {
             root._showDetailFor(contentHash)
         }
@@ -110,10 +114,17 @@ Item {
                 }
                 Label {
                     // "5 refs" when the cursor's window holds them all,
-                    // "3 of 5 refs" when the window is narrower.
+                    // "3 of 5 refs" when the window is narrower. With
+                    // delegate-local visibility binding, `shown` is
+                    // counted by scanning the store against the active
+                    // window — the ListModel itself is unfiltered.
                     text: {
                         var total = root.entryCount
-                        var shown = timelineEntries.count
+                        if (!isFinite(root.winT0) || !isFinite(root.winT1)) {
+                            return total + " ref" + (total === 1 ? "" : "s")
+                        }
+                        var shown = TM.filterByRange(
+                            root.store.entries, root.winT0, root.winT1).length
                         if (shown === total) {
                             return total + " ref" + (total === 1 ? "" : "s")
                         }
@@ -133,10 +144,20 @@ Item {
                 model: timelineEntries
                 delegate: ItemDelegate {
                     width: timelineList.width
-                    // Per-row opacity from SPEC §11.5. Precomputed in
-                    // _rebuildBindings so the model already carries it;
-                    // fall back to 1.0 before the cursor has committed.
-                    opacity: model.opacity !== undefined ? model.opacity : 1.0
+                    // Per-row visibility + opacity bound off the cursor
+                    // state (SPEC §11.5). Computing here, not in
+                    // _rebuildBindings, means dragging the cursor only
+                    // re-evaluates these two bindings on each existing
+                    // delegate — no list churn, no flicker.
+                    readonly property bool _inWindow:
+                        !isFinite(root.winT0) || !isFinite(root.winT1)
+                        || (model.timestamp >= root.winT0
+                            && model.timestamp <= root.winT1)
+                    visible: _inWindow
+                    height: _inWindow ? implicitHeight : 0
+                    opacity: isFinite(root.winTm) && isFinite(root.winW)
+                             ? TM.opacityFor(model.timestamp, root.winTm, root.winW)
+                             : 1.0
                     contentItem: ColumnLayout {
                         spacing: 2
                         Label {
@@ -157,7 +178,16 @@ Item {
             }
 
             Label {
-                visible: timelineEntries.count === 0
+                // Visible when the active cursor window is empty (or when
+                // the store is). Cheap to recompute on every drag tick
+                // (single store scan) — see also the counter label above.
+                readonly property int _visibleCount: {
+                    if (root.entryCount === 0) return 0
+                    if (!isFinite(root.winT0) || !isFinite(root.winT1)) return root.entryCount
+                    return TM.filterByRange(
+                        root.store.entries, root.winT0, root.winT1).length
+                }
+                visible: _visibleCount === 0
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 horizontalAlignment: Text.AlignHCenter
@@ -207,12 +237,15 @@ Item {
             entryCount: root.entryCount
             storeMinTs: root.storeMinTs
             storeMaxTs: root.storeMaxTs
+            // Drag-friendly: only mutate window scalars here. The marker
+            // + timeline backing models are stable; their delegates bind
+            // opacity directly off winTm/winW so dragging just repaints
+            // existing items rather than rebuilding the whole list.
             onWindowChanged: function (t0, t1) {
                 root.winT0 = t0
                 root.winT1 = t1
                 root.winTm = (t0 + t1) / 2
                 root.winW  = t1 - t0
-                root._rebuildBindings()
             }
         }
     }
@@ -291,39 +324,28 @@ Item {
         }
     }
 
-    // Recompute the ListModel + markers array from the JS store, applying
-    // the time cursor's current window (root.winT0 / winT1) and per-item
-    // opacity from SPEC §11.5. Two separate output shapes because:
-    //   - ListView wants a ListModel for delegate binding
-    //   - MapItemView (in MapView.qml) wants a plain JS array for `var`
-    //     property assignment to trip a binding update
-    //
-    // Before the cursor has emitted its first window (winT0/winT1 NaN),
-    // we show everything at full opacity so the initial paint isn't blank.
+    // Rebuild marker + timeline backing models from `store`. Runs only
+    // when the store contents change (seed/merge), NOT on every cursor
+    // pan — that lets the MapItemView and ListView keep their delegate
+    // identity across drag ticks. Per-row/per-marker opacity and
+    // visibility are computed inside the delegates from `winTm`/`winW`,
+    // so dragging mutates only those two scalars and the existing
+    // delegates re-paint smoothly without being destroyed + recreated.
     function _rebuildBindings() {
         var range = TM.storeTimeRange(root.store)
         root.entryCount = root.store.entries.length
         root.storeMinTs = range ? range.min : NaN
         root.storeMaxTs = range ? range.max : NaN
 
-        var haveWindow = isFinite(root.winT0) && isFinite(root.winT1)
-        var visible = haveWindow
-                      ? TM.filterByRange(root.store.entries,
-                                         root.winT0, root.winT1)
-                      : root.store.entries.slice()
         timelineEntries.clear()
         var newMarkers = []
-        for (var i = 0; i < visible.length; i++) {
-            var e = visible[i]
+        for (var i = 0; i < root.store.entries.length; i++) {
+            var e = root.store.entries[i]
             var ts = Number(e.timestamp)
-            var op = haveWindow
-                     ? TM.opacityFor(ts, root.winTm, root.winW)
-                     : 1.0
             timelineEntries.append({
                 content_hash: String(e.content_hash),
                 timestamp:    ts,
-                geohash:      String(e.geohash),
-                opacity:      op
+                geohash:      String(e.geohash)
             })
             var centroid = _decodeGeohashCentroid(e.geohash)
             if (centroid) {
@@ -332,28 +354,35 @@ Item {
                     timestamp:   ts,
                     geohash:     String(e.geohash),
                     latitude:    centroid.latitude,
-                    longitude:   centroid.longitude,
-                    opacity:     op
+                    longitude:   centroid.longitude
                 })
             }
         }
         root.markers = newMarkers
     }
 
-    // Call into the core's decodeGeohash invokable. Returns
-    // `{latitude, longitude}` or null on any failure. Geohash → centroid
-    // could be implemented client-side (SubmitHelpers.js encodes the
-    // inverse), but going through the core keeps wire-format knowledge
-    // single-sourced per SPEC §2.
+    // Geohash → centroid via the core's decodeGeohash invokable. Memoized
+    // per geohash because the same geohash always decodes to the same
+    // centroid (it's a static spatial encoding); without the cache,
+    // `_rebuildBindings` would re-RPC every ref on every store refresh.
+    property var _centroidCache: ({})
     function _decodeGeohashCentroid(geohash) {
+        var cached = root._centroidCache[geohash]
+        if (cached !== undefined) return cached
         try {
             var raw = logos.callModule(
                 "logos_witness_core", "decodeGeohash", [geohash])
             var parsed = (typeof raw === "string") ? JSON.parse(raw) : raw
-            if (!parsed || parsed.ok !== true) return null
-            return { latitude: parsed.latitude, longitude: parsed.longitude }
+            if (!parsed || parsed.ok !== true) {
+                root._centroidCache[geohash] = null
+                return null
+            }
+            var c = { latitude: parsed.latitude, longitude: parsed.longitude }
+            root._centroidCache[geohash] = c
+            return c
         } catch (e) {
             console.warn("decodeGeohash failed for", geohash, ":", e)
+            root._centroidCache[geohash] = null
             return null
         }
     }

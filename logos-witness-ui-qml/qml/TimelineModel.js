@@ -63,6 +63,37 @@ function formatTimestamp(unixSeconds) {
          + pad(d.getUTCMinutes()) + "Z";
 }
 
+// SPEC §11.1 relative-label phrase for a timestamp relative to `now`. The
+// bucket boundaries are calendar-naive on purpose — 30-day "month",
+// 365-day "year" — matching the fixed-width preset widths in §11.3 so
+// "month ago" lines up with one Month preset window of distance.
+//
+//   |Δt| < 60s          → "now"
+//   |Δt| < 60m          → "N minutes ago" / "in N minutes"
+//   |Δt| < 24h          → "N hours ago"   / "in N hours"
+//   |Δt| < 7d           → "N days ago"    / "in N days"
+//   |Δt| < 30d          → "N weeks ago"   / "in N weeks"
+//   |Δt| < 365d         → "N months ago"  / "in N months"
+//   otherwise           → "N years ago"   / "in N years"
+function formatRelative(unixSeconds, nowSeconds) {
+    var ts  = Number(unixSeconds);
+    var now = Number(nowSeconds);
+    if (!isFinite(ts) || !isFinite(now)) return "";
+    var delta = ts - now;            // future → positive, past → negative
+    var abs = Math.abs(delta);
+    if (abs < 60) return "now";
+    var future = delta > 0;
+    var n, unit;
+    if      (abs < 3600)      { n = Math.floor(abs / 60);        unit = "minute"; }
+    else if (abs < 86400)     { n = Math.floor(abs / 3600);      unit = "hour";   }
+    else if (abs < 604800)    { n = Math.floor(abs / 86400);     unit = "day";    }
+    else if (abs < 2592000)   { n = Math.floor(abs / 604800);    unit = "week";   }
+    else if (abs < 31536000)  { n = Math.floor(abs / 2592000);   unit = "month";  }
+    else                      { n = Math.floor(abs / 31536000);  unit = "year";   }
+    var label = n + " " + unit + (n === 1 ? "" : "s");
+    return future ? ("in " + label) : (label + " ago");
+}
+
 // 8-char hex prefix of the hex-encoded content_hash. Enough to eyeball
 // distinctness in the timeline without overwhelming the row.
 function shortHash(hashHex) {

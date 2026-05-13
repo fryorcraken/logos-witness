@@ -257,6 +257,48 @@ TestCase {
         compare(TM.clampMidpoint(450, 100, 500, 1000), 450)
     }
 
+    // ---- SPEC §11.1 relative-label helper -------------------------------
+
+    function test_formatRelative_now_bucket() {
+        compare(TM.formatRelative(1000, 1000), "now")
+        compare(TM.formatRelative(1059, 1000), "now", "59s past → still now")
+        compare(TM.formatRelative(941,  1000), "now", "59s ago → still now")
+    }
+
+    function test_formatRelative_past_buckets() {
+        compare(TM.formatRelative(1000 - 60,        1000), "1 minute ago")
+        compare(TM.formatRelative(1000 - 120,       1000), "2 minutes ago")
+        compare(TM.formatRelative(1000 - 3600,      1000), "1 hour ago")
+        compare(TM.formatRelative(1000 - 7200,      1000), "2 hours ago")
+        compare(TM.formatRelative(1000 - 86400,     1000), "1 day ago")
+        compare(TM.formatRelative(1000 - 86400 * 3, 1000), "3 days ago")
+        compare(TM.formatRelative(1000 - 604800,    1000), "1 week ago")
+        compare(TM.formatRelative(1000 - 604800 * 3,1000), "3 weeks ago")
+        compare(TM.formatRelative(1000 - 2592000,   1000), "1 month ago")
+        compare(TM.formatRelative(1000 - 31536000,  1000), "1 year ago")
+        compare(TM.formatRelative(1000 - 31536000*5,1000), "5 years ago")
+    }
+
+    function test_formatRelative_future_buckets() {
+        compare(TM.formatRelative(1000 + 60,        1000), "in 1 minute")
+        compare(TM.formatRelative(1000 + 3600 * 5,  1000), "in 5 hours")
+        compare(TM.formatRelative(1000 + 86400 * 2, 1000), "in 2 days")
+    }
+
+    function test_formatRelative_bucket_boundaries() {
+        // At exactly 60s the "minutes" bucket starts. At 3600s the "hours"
+        // bucket starts, etc. Boundary lands on the new unit at N=1.
+        compare(TM.formatRelative(1000 + 60,    1000), "in 1 minute")
+        compare(TM.formatRelative(1000 + 3600,  1000), "in 1 hour")
+        compare(TM.formatRelative(1000 + 86400, 1000), "in 1 day")
+    }
+
+    function test_formatRelative_invalid_inputs() {
+        compare(TM.formatRelative(NaN, 1000), "")
+        compare(TM.formatRelative(1000, NaN), "")
+        compare(TM.formatRelative("nope", 1000), "")
+    }
+
     function test_clampMidpoint_empty_store_fallback() {
         // No oldest → only the future bound applies.
         compare(TM.clampMidpoint(9999, 100, NaN, 1000), 1050)

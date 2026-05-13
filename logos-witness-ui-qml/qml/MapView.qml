@@ -3,6 +3,7 @@ import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import QtLocation 6.5
 import QtPositioning 6.5
+import "TimelineModel.js" as TM
 
 // Phase 3.2: OSM tile map, capped at z=9 (regional, no street detail).
 // SPEC §7.10: OSM is the sole permitted external data source for v0;
@@ -33,8 +34,19 @@ Item {
 
     // Display-mode markers. Each entry is `{latitude, longitude, contentHash,
     // geohash, timestamp}`. Populated by Main.qml from listInscriptions +
-    // referenceObserved.
+    // referenceObserved. Per-marker opacity + visibility are NOT stored
+    // here — they bind off the cursor state below so the array stays
+    // identity-stable across drag ticks (no MapItemView delegate churn).
     property var markers: []
+
+    // Time cursor state, fed from Main.qml's TimeCursor windowChanged
+    // handler. NaN before the cursor commits its first window; in that
+    // case the marker delegates fall back to "always visible / full
+    // opacity" so the initial paint isn't blank.
+    property real cursorT0: NaN
+    property real cursorT1: NaN
+    property real cursorTm: NaN
+    property real cursorW:  NaN
 
     signal pinned(string geohash, real latitude, real longitude)
     signal markerClicked(string contentHash)
@@ -107,9 +119,10 @@ Item {
         }
 
         // Display markers. MapItemView is the idiomatic QtLocation
-        // marker repeater; rebinding `markers` re-renders.
-        // Per-marker opacity is SPEC §11.5: 1.0 at the cursor midpoint,
-        // 0.15 at the window edges. Defaults to 1.0 when callers omit it.
+        // marker repeater. The `markers` array changes only when the
+        // store does (seed / new ref); cursor pans flow through the
+        // `cursor*` properties above and re-evaluate the per-delegate
+        // visibility + opacity bindings below without recreating items.
         MapItemView {
             model: root.markers
             delegate: MapQuickItem {
@@ -117,7 +130,18 @@ Item {
                 anchorPoint.y: markerDot.height / 2
                 coordinate: QtPositioning.coordinate(
                     modelData.latitude, modelData.longitude)
-                opacity: modelData.opacity !== undefined ? modelData.opacity : 1.0
+                // SPEC §11.5: refs outside [t0, t1] are hidden entirely;
+                // refs inside ramp linearly from 1.0 at the midpoint to
+                // 0.15 at the edges. Pre-cursor fallback: full opacity.
+                readonly property bool _haveCursor:
+                    isFinite(root.cursorT0) && isFinite(root.cursorT1)
+                visible: !_haveCursor
+                         || (modelData.timestamp >= root.cursorT0
+                             && modelData.timestamp <= root.cursorT1)
+                opacity: _haveCursor
+                         ? TM.opacityFor(modelData.timestamp,
+                                         root.cursorTm, root.cursorW)
+                         : 1.0
                 sourceItem: Rectangle {
                     id: markerDot
                     width: 12

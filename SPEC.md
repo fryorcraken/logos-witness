@@ -556,15 +556,27 @@ rail. Top-to-bottom:
 
 - **Cursor line** — a horizontal axis from `t0` (left edge) to `t1` (right
   edge). The midpoint `tm = t0 + (t1 - t0) / 2` is marked with a fixed
-  triangular indicator centered on the strip. Endpoint ticks label `t0` and
-  `t1` with short ISO labels (e.g. `2026-05-12`).
+  triangular indicator centered on the strip. All three ticks (`t0`, `tm`,
+  `t1`) are labeled with two lines: the short ISO date on top (e.g.
+  `2026-05-12`), and a relative phrase below in a smaller, dimmer font
+  (e.g. `now`, `2 days ago`, `3 weeks ago`, `1 year ago`). Bucket
+  granularity for the relative phrase: `now` (within ±1 min of `now`),
+  `N minutes ago`, `N hours ago`, `N days ago`, `N weeks ago`, `N months
+  ago`, `N years ago` — whichever unit gives `N ≥ 1`. Future ticks (rare
+  after §11.6's clamp) read `in N …`.
 - **Density curve** — area chart above the cursor line, computed over the
   visible window only (§11.4).
 - **Scale buttons** — `Day`, `Week`, `Month`, `Year`. Exactly one is active;
   switching presets re-centers the window on the current midpoint and resets
   width per §11.3.
-- **Today shortcut** — a single button that snaps the midpoint back to `now`
-  without changing the scale.
+- **Today shortcut** — a single button that anchors the right edge to
+  `now`: `tm = now - W/2`, so `t1 = now` and the strip shows the most
+  recent full window of past time without any empty future half. Does not
+  change the active scale. Distinct from drag/step (§11.6), which remain
+  centered-playhead operations and may freely pan `tm` so long as the
+  §11.6 bounds hold — a user who wants the playhead centered on a past
+  midpoint can still drag there; `Today` is the sensible default after
+  scrolling, not a hard right-edge bound.
 
 ### 11.2 Window model
 

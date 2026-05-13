@@ -51,6 +51,11 @@ Item {
     }
     readonly property var bins: TM.binCounts(refs, t0, t1, binCount)
 
+    // Reference point for `formatRelative` on the three tick labels.
+    // Refreshed on every _commitWindow so labels update when the user
+    // scrolls/scales but don't tick wall-clock-style mid-drag.
+    property real _labelNow: NaN
+
     signal windowChanged(real t0, real t1)
 
     implicitHeight: 110
@@ -62,8 +67,12 @@ Item {
     // completion and clamp on subsequent store changes so the cursor stays
     // inside the §11.6 bounds.
     Component.onCompleted: {
+        // Anchor the initial window to the right edge of "now" — same
+        // principle as the Today button (§11.1): the future is empty,
+        // so don't waste half the strip on it. The user can drag back
+        // to recenter the playhead on a past moment.
         if (!isFinite(root.tm)) {
-            root.tm = root._now()
+            root.tm = root._now() - root.windowW / 2
         }
         root._commitWindow()
     }
@@ -77,17 +86,19 @@ Item {
 
     function _commitWindow() {
         if (!isFinite(root.tm)) return
+        var nowS = root._now()
         var clamped = TM.clampMidpoint(
             root.tm,
             root.windowW,
             isFinite(root.storeMinTs) ? root.storeMinTs : NaN,
-            root._now())
+            nowS)
         if (clamped !== root.tm) {
             // Re-entry guard: setting tm fires this slot again, but the
             // second pass is a no-op because the clamp is idempotent.
             root.tm = clamped
             return
         }
+        root._labelNow = nowS
         root.windowChanged(root.t0, root.t1)
     }
 
@@ -102,8 +113,12 @@ Item {
         root.tm = root.tm + deltaSeconds
     }
 
+    // SPEC §11.1 (amended): Today anchors the right edge to now. tm is
+    // shifted so t1 = now (no empty future half); the playhead therefore
+    // sits at the strip center over `now - W/2`. Drag/step still operate
+    // on tm directly — Today is the convenient default, not a hard bound.
     function _today() {
-        root.tm = root._now()
+        root.tm = root._now() - root.windowW / 2
     }
 
     // Repaint the density curve whenever the underlying bin counts change.
@@ -212,36 +227,74 @@ Item {
                     }
                 }
 
+                // Tick labels: two lines each. Top line is the ISO date,
+                // bottom line is a relative phrase ("now", "3 days ago",
+                // "1 year ago") per SPEC §11.1. The relative phrases pin
+                // off `root._labelNow`, refreshed on every windowChanged
+                // commit (not a live wall-clock — second-by-second ticks
+                // would just cause needless rebinds during drag).
+
                 // t0 label (left)
-                Label {
-                    text: isFinite(root.t0) ? TM.formatTimestamp(root.t0) : ""
-                    font.pixelSize: 10
-                    font.family: "monospace"
-                    color: "#555"
+                Column {
                     anchors.left: parent.left
                     anchors.top: axisLine.bottom
                     anchors.topMargin: 2
+                    spacing: 0
+                    Label {
+                        text: isFinite(root.t0) ? TM.formatTimestamp(root.t0) : ""
+                        font.pixelSize: 10
+                        font.family: "monospace"
+                        color: "#555"
+                    }
+                    Label {
+                        text: isFinite(root.t0)
+                              ? TM.formatRelative(root.t0, root._labelNow) : ""
+                        font.pixelSize: 9
+                        color: "#888"
+                    }
                 }
                 // tm label (center)
-                Label {
-                    text: isFinite(root.tm) ? TM.formatTimestamp(root.tm) : ""
-                    font.pixelSize: 10
-                    font.family: "monospace"
-                    color: "#222"
-                    font.bold: true
+                Column {
                     anchors.horizontalCenter: parent.horizontalCenter
                     anchors.top: axisLine.bottom
                     anchors.topMargin: 2
+                    spacing: 0
+                    Label {
+                        text: isFinite(root.tm) ? TM.formatTimestamp(root.tm) : ""
+                        font.pixelSize: 10
+                        font.family: "monospace"
+                        color: "#222"
+                        font.bold: true
+                        anchors.horizontalCenter: parent.horizontalCenter
+                    }
+                    Label {
+                        text: isFinite(root.tm)
+                              ? TM.formatRelative(root.tm, root._labelNow) : ""
+                        font.pixelSize: 9
+                        color: "#666"
+                        anchors.horizontalCenter: parent.horizontalCenter
+                    }
                 }
                 // t1 label (right)
-                Label {
-                    text: isFinite(root.t1) ? TM.formatTimestamp(root.t1) : ""
-                    font.pixelSize: 10
-                    font.family: "monospace"
-                    color: "#555"
+                Column {
                     anchors.right: parent.right
                     anchors.top: axisLine.bottom
                     anchors.topMargin: 2
+                    spacing: 0
+                    Label {
+                        text: isFinite(root.t1) ? TM.formatTimestamp(root.t1) : ""
+                        font.pixelSize: 10
+                        font.family: "monospace"
+                        color: "#555"
+                        anchors.right: parent.right
+                    }
+                    Label {
+                        text: isFinite(root.t1)
+                              ? TM.formatRelative(root.t1, root._labelNow) : ""
+                        font.pixelSize: 9
+                        color: "#888"
+                        anchors.right: parent.right
+                    }
                 }
             }
 
@@ -264,7 +317,15 @@ Item {
                     var dx = mouse.x - _dragStartX
                     var secPerPx = root.windowW / cursorStrip.width
                     // Drag right = older content moves left = tm goes back.
-                    root.tm = _dragStartTm - dx * secPerPx
+                    var raw = _dragStartTm - dx * secPerPx
+                    // Pre-clamp here so we don't fire `tm = raw` then
+                    // immediately `tm = clamped` from _commitWindow,
+                    // doubling windowChanged emissions on every drag tick.
+                    root.tm = TM.clampMidpoint(
+                        raw,
+                        root.windowW,
+                        isFinite(root.storeMinTs) ? root.storeMinTs : NaN,
+                        root._now())
                 }
             }
         }
