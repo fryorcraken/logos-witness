@@ -43,14 +43,21 @@ TestCase {
         // so earlier cases may have mutated scalePreset / tm.
         cursor.scalePreset = "day"
         cursor.tm = 1700001800
-        // Component.onCompleted commits the initial window.
-        verify(windowSpy.count >= 1, "windowChanged fired after load")
+        // Force at least one fresh emission against this spy: clear, nudge
+        // tm by one second so the binding fires unambiguously, then assert.
+        // The original version verified `count >= 1` immediately after the
+        // assignments above, which only worked because Component.onCompleted
+        // had populated the spy — brittle under test reordering.
+        windowSpy.clear()
+        cursor.tm = cursor.tm + 1
+        verify(windowSpy.count >= 1, "windowChanged fired on tm change")
         verify(isFinite(cursor.t0))
         verify(isFinite(cursor.t1))
-        // Day preset: W=86400 → half-width 43200.
+        // Day preset: W=86400 → half-width 43200. The +1 above shifts tm to
+        // 1700001801; the window stays symmetric around the new midpoint.
         compare(cursor.windowW, 86400)
-        compare(cursor.t0, 1700001800 - 43200)
-        compare(cursor.t1, 1700001800 + 43200)
+        compare(cursor.t0, 1700001801 - 43200)
+        compare(cursor.t1, 1700001801 + 43200)
     }
 
     function test_scale_change_widens_window() {
