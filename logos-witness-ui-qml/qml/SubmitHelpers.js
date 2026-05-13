@@ -26,6 +26,39 @@ function canSubmit(filePath, geohash8, timestampDate) {
     return true
 }
 
+// Validate a date string + time string from the SubmitDialog When tab.
+// Returns `{ ok: true, value: Date }` on success, `{ ok: false, error }`
+// otherwise. Strict — accepts only `YYYY-MM-DD` + `HH:MM:SS`, rejects
+// out-of-range months/days/hours and impossible calendar dates (e.g.
+// `2026-02-31`). Both fields must be present; partial input is an
+// error so the dialog can't silently fall back to the previously-valid
+// capturedAt.
+function validateDateTime(dateStr, timeStr) {
+    if (!dateStr)  return { ok: false, error: "date is empty" }
+    if (!timeStr)  return { ok: false, error: "time is empty" }
+    var dm = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(dateStr)
+    if (!dm) return { ok: false, error: "date must be YYYY-MM-DD" }
+    var y = +dm[1], mo = +dm[2], dy = +dm[3]
+    if (mo < 1 || mo > 12) return { ok: false, error: "month must be 1-12" }
+    if (dy < 1 || dy > 31) return { ok: false, error: "day must be 1-31" }
+    var tm = /^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/.exec(timeStr)
+    if (!tm) return { ok: false, error: "time must be HH:MM or HH:MM:SS" }
+    var h = +tm[1], mi = +tm[2], s = tm[3] !== undefined ? +tm[3] : 0
+    if (h  < 0 || h  > 23) return { ok: false, error: "hour must be 0-23"   }
+    if (mi < 0 || mi > 59) return { ok: false, error: "minute must be 0-59" }
+    if (s  < 0 || s  > 59) return { ok: false, error: "second must be 0-59" }
+    // Date.UTC normalises overflow (e.g. month=2, day=31 → March 3), so
+    // detect impossible calendar dates by round-tripping the parts.
+    var ms = Date.UTC(y, mo - 1, dy, h, mi, s)
+    var d  = new Date(ms)
+    if (d.getUTCFullYear()  !== y  || d.getUTCMonth() !== mo - 1
+        || d.getUTCDate()   !== dy || d.getUTCHours() !== h
+        || d.getUTCMinutes()!== mi || d.getUTCSeconds() !== s) {
+        return { ok: false, error: dateStr + " is not a real date" }
+    }
+    return { ok: true, value: d }
+}
+
 // Strip a `file://` URL prefix to a filesystem path. The core's submitPhoto
 // reads via QFile from a plain path, not a URL.
 function filePathFromUrl(url) {

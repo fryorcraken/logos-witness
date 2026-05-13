@@ -11,36 +11,95 @@ bumped, vendored Qt6 QtLocation/QtPositioning imports, env-wedge launcher),
 3.1, 3.2, 3.3, 3.4 (map + timeline app shell + decode invokables + SPEC §2
 amendment locking decoders into the core surface), 3.5 (TimeCursor per
 SPEC §11 — centered playhead, day/week/month/year scales, drag-to-pan +
-‹/›/Today step buttons, density curve via Canvas2D area chart, opacity
-ramp on visible markers + rows; helpers + smoke tests under qmltestrunner).
+‹/›/Today step buttons, density curve, opacity ramp on visible markers
++ rows; dogfooded twice, code-reviewed once, see "Dogfood findings"
+below).
 
-**Resume here:** Phase 3 checkpoint review (manual e2e in basecamp:
-submit ≥ 3 photos at deliberately spread times, confirm midpoint
-opaque / edges faint / out-of-window absent, scroll + scale + Today
-exercise; capture README screenshots), then Phase 4 (strip pipeline).
+**Resume here:** Phase 4 (strip pipeline — Task 4.1 `exif_strip`
+implementation). Phase 3 checkpoint is *de facto* done: 3.5 has been
+dogfooded twice on alice profile and the cursor + submit flow are
+behaviorally correct. The README quickstart + screenshots checkbox in
+the Phase 3 checkpoint is still empty — pick that up either before or
+alongside 4.1, not blocking.
 
-**Pending user review** (batched so the user doesn't read intermediate
-states):
+**Pending user review** is now empty. The original three-commit batch
+(`e0a806b` SPEC §11 + `d3cfb22` cursor rewrite + `b0d874e` CI fix) was
+reviewed by the `code-reviewer` agent-skill subagent on 2026-05-13;
+verdict APPROVE with no Critical findings. One Important follow-up
+(test brittleness) landed as `4376f53`. A second review pass on the
+datetime-validation dogfood fix (same date) returned APPROVE WITH MINOR
+CHANGES, all addressed in the commit before this status block.
 
-- `e0a806b spec(ui): redesign Phase 3.5 time scrubber as a centered-
-  playhead time cursor` — the *spec* (SPEC §11) is the keeper. The
-  *code* in that commit (`Main.qml`, `TimelineModel.js`,
-  `tests/tst_timeline_model.qml`) is throw-away scaffolding superseded
-  by the rewrite below; review only the helpers/tests that survive
-  (`filterByRange`, `storeTimeRange`, `entryCount`/`storeMin/MaxTs`).
-- `b0d874e ci+docs: fix red main from missing test_geohash target;
-  expand CLAUDE.md` — orthogonal CI fix + agent-workflow doc; safe to
-  review independently.
-- `<TBD> feat(ui): TimeCursor per SPEC §11 (Phase 3.5 redux)` — the
-  rewrite. Review together with `e0a806b`. Adds `TimeCursor.qml` +
-  `windowFromMidpoint`/`binCounts`/`opacityFor`/`clampMidpoint` JS
-  helpers + qmltest cases for each + a `TimeCursor` smoke test.
-  Replaces the RangeSlider Frame in `Main.qml`; threads per-item
-  opacity through both the timeline ListModel and the map marker
-  delegate (`MapView.qml`). Local qmltest invocation in `README.md`
-  switched from `find …| head -1` to `nix eval --raw` so the pinned
-  QML2_IMPORT_PATH matches the qmltestrunner binary (avoids a
-  6.9.2/6.10.1 ABI mismatch once tests import QtQuick.Controls).
+**Dogfood findings (Phase 3.5, all addressed)** — kept for context so the
+next agent doesn't reopen ground that's been walked:
+
+- `d5b187c` — `Today` was snapping `tm = now`, putting the playhead at
+  the strip center with the entire right half showing empty future
+  time. Fixed to anchor `t1 = now` instead (so `tm = now - W/2`); same
+  default applies on initial load. SPEC §11.1 amended.
+- `d5b187c` — Tick labels gained a second line below the ISO date with
+  a relative phrase (`now`, `3 days ago`, `1 year ago`) via new
+  `TM.formatRelative` helper. SPEC §11.1 amended.
+- `d5b187c` — Dragging the cursor produced a visible white flash on
+  every map marker because `_rebuildBindings` rebuilt `root.markers` as
+  a fresh JS array on every `windowChanged`, destroying + recreating
+  every `MapItemView` delegate. Fixed by moving per-marker opacity +
+  visibility into the delegate (binds against `cursorTm`/`cursorW`/
+  `cursorT0`/`cursorT1` properties on `MapView`); store-rebuild path
+  now only runs on actual store changes. Same treatment applied to the
+  timeline `ListView` delegate.
+- `d5b187c` — `_decodeGeohashCentroid` memoized via `_centroidCache`
+  (geohashes are stable spatial encodings; cache invalidation never
+  needed).
+- `d5b187c` — Drag handler pre-clamps `tm` so `windowChanged` fires
+  once per drag tick instead of twice.
+- `ac7b470` — Tick labels' relative-phrase line was rendering past the
+  axis row's bottom edge and being clipped behind the scale-button
+  row. Bumped `axisRow` height 26→46, `cursorStrip` 70→90,
+  `TimeCursor.implicitHeight` 110→130; moved axis line to top+8
+  inside the row (was vertical-center).
+- `<this commit>` — SubmitDialog silently fell back to the dialog-open
+  `capturedAt` if the user typed an invalid date like `2026-05-7`
+  (regex `validator` rejected partial input, `_recomputeCapturedAt`
+  early-returned with no signal). Fixed by replacing the regex
+  validators with a strict `SubmitHelpers.validateDateTime` helper
+  that returns `{ok, value, error}`; surfaces inline ⚠ and `When ⚠`
+  tab marker; gates Submit via a new `dateTimeError === ""` clause in
+  `_canSubmit`. SubmitDialog also dropped its inline mirror copies of
+  `_unixSecondsString` / `_filePathFromUrl` in favor of importing
+  SubmitHelpers as `SH` (the import was already pulled in for
+  `validateDateTime`).
+
+**v1 / future enhancements surfaced by dogfooding** (NOT in v0 scope —
+these are reminders, not tasks):
+
+- Replace the When-tab `Date (YYYY-MM-DD)` + `Time (HH:MM[:SS])` text
+  pair with a native Qt date/time picker. The text fields work but are
+  hostile UX. Qt 6.5+ ships `Qt.labs.calendar` (DayOfWeekRow, MonthGrid,
+  …) and `Qt.labs.platform` (native dialogs); pick whichever survives
+  the basecamp QML engine's DenyAll `QNetworkAccessManager` and
+  Qt-version pins. The validation helper this commit adds is the
+  contract — the picker just feeds it.
+- EXIF DateTimeOriginal auto-fill on photo selection (already mentioned
+  in the When-tab help text and SubmitDialog header).
+- Marker grouping when density is high (SPEC §11.9 mentions this; the
+  curve already communicates "lots happened here" so it's a v1
+  affordance).
+- Calendar-aligned scale presets / custom-width entry (SPEC §11.3
+  flags `Custom` and calendar-aligned `This month` as v1; would
+  require a SPEC amendment).
+
+**Code-review follow-ups carried forward** (the `code-reviewer` subagent
+flagged these on 2026-05-13; they're Suggestion-tier and don't block
+Phase 4):
+
+- `TimelineModel.js binCounts`: the `idx >= n` clamp is unreachable
+  given the `ts === hi` branch but masks an fp-drift edge case at
+  internal bin boundaries. Tidy when convenient.
+- `TimeCursor.qml windowW`: magic literal `31536000` in the fallback;
+  pull from `TM.SCALE_PRESETS.year` for single-source-of-truth.
+- `Main.qml winTm`: direct binding to `timeCursor.tm` would be
+  one-line shorter than `(t0+t1)/2` derivation.
 
 **Notable deviations from the original plan**, documented in commit history
 and reflected in the per-task checkboxes below:

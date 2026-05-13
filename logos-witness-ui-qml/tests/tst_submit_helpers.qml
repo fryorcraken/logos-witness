@@ -75,4 +75,65 @@ TestCase {
         verify(/^[0-9bcdefghjkmnpqrstuvwxyz]+$/.test(s),
                "expected base32-geohash chars only, got: " + s)
     }
+
+    // ---- validateDateTime: dogfood feedback ------------------------------
+
+    function test_validateDateTime_canonical() {
+        var r = SubmitHelpers.validateDateTime("2026-05-13", "14:30:00")
+        verify(r.ok)
+        compare(r.value.getUTCFullYear(), 2026)
+        compare(r.value.getUTCMonth(), 4)   // May = 4
+        compare(r.value.getUTCDate(), 13)
+        compare(r.value.getUTCHours(), 14)
+    }
+
+    function test_validateDateTime_accepts_short_fields() {
+        // Single-digit day/month/hour/minute/second — what the user
+        // actually types. The regex is intentionally lenient on width;
+        // range checks below catch genuine out-of-range values.
+        verify(SubmitHelpers.validateDateTime("2026-5-7",  "9:05:00").ok)
+        verify(SubmitHelpers.validateDateTime("2026-12-1", "00:00:00").ok)
+        verify(SubmitHelpers.validateDateTime("2026-5-7",  "9:5:0").ok)
+    }
+
+    function test_validateDateTime_accepts_HHMM_without_seconds() {
+        var r = SubmitHelpers.validateDateTime("2026-05-13", "14:30")
+        verify(r.ok)
+        compare(r.value.getUTCSeconds(), 0)
+    }
+
+    function test_validateDateTime_empty_inputs() {
+        verify(!SubmitHelpers.validateDateTime("", "14:00").ok)
+        verify(!SubmitHelpers.validateDateTime("2026-05-13", "").ok)
+    }
+
+    function test_validateDateTime_malformed_strings() {
+        // Non-numeric, garbage, wrong separators — all rejected.
+        verify(!SubmitHelpers.validateDateTime("yesterday", "14:00").ok)
+        verify(!SubmitHelpers.validateDateTime("2026/05/13", "14:00").ok)
+        verify(!SubmitHelpers.validateDateTime("2026-05-13", "14h00").ok)
+    }
+
+    function test_validateDateTime_out_of_range() {
+        verify(!SubmitHelpers.validateDateTime("2026-13-01", "00:00").ok,
+               "month 13 rejected")
+        verify(!SubmitHelpers.validateDateTime("2026-00-15", "00:00").ok,
+               "month 0 rejected")
+        verify(!SubmitHelpers.validateDateTime("2026-05-32", "00:00").ok,
+               "day 32 rejected")
+        verify(!SubmitHelpers.validateDateTime("2026-05-13", "24:00:00").ok,
+               "hour 24 rejected")
+        verify(!SubmitHelpers.validateDateTime("2026-05-13", "12:60:00").ok,
+               "minute 60 rejected")
+    }
+
+    function test_validateDateTime_impossible_calendar_date() {
+        // 31 February doesn't exist; previously this would have silently
+        // rolled forward to early March via Date overflow.
+        verify(!SubmitHelpers.validateDateTime("2026-02-31", "00:00").ok)
+        verify(!SubmitHelpers.validateDateTime("2025-02-29", "00:00").ok,
+               "2025 isn't a leap year")
+        verify( SubmitHelpers.validateDateTime("2024-02-29", "00:00").ok,
+               "2024 IS a leap year")
+    }
 }

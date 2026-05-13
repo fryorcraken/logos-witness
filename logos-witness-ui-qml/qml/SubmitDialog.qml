@@ -2,6 +2,7 @@ import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import QtQuick.Dialogs
+import "SubmitHelpers.js" as SH
 
 // Phases 3.1 + 3.2 + 3.3: photo picker, geohash drop-pin via MapView,
 // timestamp confirm, and submit wire-up to logos_witness_core.
@@ -31,24 +32,20 @@ Dialog {
     property bool   hasPin: false
     property var    capturedAt: new Date()
 
+    // When-tab validation. `dateTimeError` is non-empty iff the date or
+    // time field's *current* text doesn't parse cleanly. Visible on the
+    // When tab and gates Submit. Without this, regex-validators silently
+    // rejected partial input (e.g. `2026-05-7`) and `capturedAt` fell
+    // back to the dialog-open default — uploads succeeded with a stale
+    // timestamp the user thought they'd overridden.
+    property string dateTimeError: ""
+
     property string lastError: ""
     property bool   submitting: false
 
-    // Mirror of SubmitHelpers.js — see that file for canonical impl + tests.
-    // Inlined to keep this Dialog self-contained; the canonical .js sits
-    // next to it under qml/ and is `import`able if we ever want to share.
-    function _unixSecondsString(date) {
-        return Math.floor(date.getTime() / 1000).toString()
-    }
-    function _filePathFromUrl(url) {
-        var s = url.toString()
-        if (s.indexOf("file://") === 0) return s.substring(7)
-        return s
-    }
-
     readonly property bool _canSubmit:
         selectedFile != "" && pinGeohash !== "" && capturedAt !== null
-        && !submitting
+        && dateTimeError === "" && !submitting
 
     contentItem: ColumnLayout {
         spacing: 8
@@ -62,7 +59,13 @@ Dialog {
             // soon as the dialog is visible. Mirror the canSubmit clause
             // (`capturedAt !== null`) so users see the same "ready" signal
             // they get for Photo / Location.
-            TabButton { text: submitDialog.capturedAt !== null  ? "When ✓"     : "When" }
+            // When-tab marker: ⚠ when a field doesn't parse, ✓ when it
+            // does, plain "When" before the user has touched either field.
+            TabButton {
+                text: submitDialog.dateTimeError !== ""
+                      ? "When ⚠"
+                      : (submitDialog.capturedAt !== null ? "When ✓" : "When")
+            }
         }
 
         StackLayout {
@@ -144,7 +147,9 @@ Dialog {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     text: "Defaults to now. Edit the date and time to backdate. "
-                          + "Future versions will read the capture time from the photo automatically."
+                          + "Future versions will read the capture time from "
+                          + "the photo automatically — and replace these fields "
+                          + "with a proper date/time picker."
                     color: "#666"
                     font.pixelSize: 10
                 }
@@ -154,18 +159,24 @@ Dialog {
                     columnSpacing: 8
                     rowSpacing: 6
 
+                    // No `validator:` on these fields — we validate via
+                    // SubmitHelpers.validateDateTime on text change, then
+                    // either accept the typed value into `capturedAt` or
+                    // surface a visible error. The previous RegularExpression
+                    // validator silently rejected partial input like
+                    // `2026-05-7`, leaving capturedAt stuck at the dialog-
+                    // open default while the user thought they'd overridden
+                    // it. Silent fallback is now impossible — Submit is
+                    // gated by `dateTimeError === ""`.
                     Label { text: "Date (YYYY-MM-DD):" }
                     TextField {
                         id: dateField
                         Layout.preferredWidth: 140
                         text: Qt.formatDate(submitDialog.capturedAt, "yyyy-MM-dd")
-                        validator: RegularExpressionValidator {
-                            regularExpression: /^\d{4}-\d{2}-\d{2}$/
-                        }
-                        onEditingFinished: submitDialog._recomputeCapturedAt()
+                        onTextChanged: submitDialog._revalidateDateTime()
                     }
 
-                    Label { text: "Time (HH:MM:SS):" }
+                    Label { text: "Time (HH:MM[:SS]):" }
                     TextField {
                         id: timeField
                         Layout.preferredWidth: 110
@@ -173,11 +184,20 @@ Dialog {
                             new Date(submitDialog.capturedAt.getTime()
                                      + submitDialog.capturedAt.getTimezoneOffset() * 60000),
                             "HH:mm:ss")
-                        validator: RegularExpressionValidator {
-                            regularExpression: /^\d{2}:\d{2}:\d{2}$/
-                        }
-                        onEditingFinished: submitDialog._recomputeCapturedAt()
+                        onTextChanged: submitDialog._revalidateDateTime()
                     }
+                }
+
+                // Inline validation feedback. Visible only when the parser
+                // rejects the current pair; clears as soon as the user
+                // types something valid.
+                Label {
+                    Layout.fillWidth: true
+                    visible: submitDialog.dateTimeError !== ""
+                    text: "⚠ " + submitDialog.dateTimeError
+                    color: "#c0392b"
+                    font.pixelSize: 11
+                    wrapMode: Text.WordWrap
                 }
 
                 Item { Layout.fillHeight: true }
@@ -221,24 +241,27 @@ Dialog {
         onAccepted: submitDialog.selectedFile = fileDialog.selectedFile
     }
 
-    function _recomputeCapturedAt() {
-        var d = dateField.text
-        var t = timeField.text
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || !/^\d{2}:\d{2}:\d{2}$/.test(t)) return
-        var parts = d.split("-")
-        var tparts = t.split(":")
-        var iso = parts[0] + "-" + parts[1] + "-" + parts[2]
-                  + "T" + tparts[0] + ":" + tparts[1] + ":" + tparts[2] + "Z"
-        var parsed = new Date(iso)
-        if (!isNaN(parsed.getTime())) capturedAt = parsed
+    // Parse the When-tab fields. On success: capturedAt is updated and
+    // dateTimeError is cleared. On failure: capturedAt is left as-is (so
+    // a previously-valid value isn't clobbered while the user is mid-
+    // edit) and dateTimeError is set so the inline message + the
+    // disabled Submit button signal the problem.
+    function _revalidateDateTime() {
+        var r = SH.validateDateTime(dateField.text, timeField.text)
+        if (r.ok) {
+            capturedAt = r.value
+            dateTimeError = ""
+        } else {
+            dateTimeError = r.error
+        }
     }
 
     function _submit() {
         lastError = ""
         submitting = true
         try {
-            var path  = _filePathFromUrl(selectedFile)
-            var stamp = _unixSecondsString(capturedAt)
+            var path  = SH.filePathFromUrl(selectedFile)
+            var stamp = SH.unixSecondsString(capturedAt)
             var result = logos.callModule(
                 "logos_witness_core", "submitPhoto",
                 [path, stamp, pinGeohash])
@@ -275,6 +298,7 @@ Dialog {
         hasPin = false
         capturedAt = new Date()
         lastError = ""
+        dateTimeError = ""
         submitting = false
     }
 }
