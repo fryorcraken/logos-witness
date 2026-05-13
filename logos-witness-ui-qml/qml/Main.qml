@@ -9,9 +9,10 @@ import "TimelineModel.js" as TM
 // instance demo). Cross-instance live feed lands in Phase 6 when Delivery
 // is wired; until then the only producer of refs is local submission.
 //
-// Phase 3.5: a RangeSlider scrubber along the bottom filters both the
-// timeline list and the map markers by [fromTs, toTs]. NaN bounds mean
-// "no filter"; the slider snaps to the store's oldest/newest timestamps.
+// Phase 3.5 (per SPEC §11): a centered-playhead TimeCursor along the
+// bottom owns time navigation. It emits `windowChanged(t0, t1)`; this
+// shell rebuilds marker + timeline visibility and applies an opacity
+// ramp from `opacityFor(ts, tm, W)` to every visible item.
 
 Item {
     id: root
@@ -32,18 +33,19 @@ Item {
     // Reactive mirrors of `store` for QML bindings. `store.entries` is a
     // plain JS array mutated in place by TimelineModel.js; bindings that
     // read it directly never re-evaluate. _rebuildBindings keeps these in
-    // sync after every seed/merge so the scrubber, counters, and slider
-    // bounds update when refs arrive.
+    // sync after every seed/merge so the time cursor, counters, and bounds
+    // update when refs arrive.
     property int  entryCount: 0
     property real storeMinTs: NaN
     property real storeMaxTs: NaN
 
-    // Phase 3.5 scrubber state. `fromTs`/`toTs` are the active filter; both
-    // NaN means "no filter" (scrubber hidden or at full extent). The slider
-    // pushes new values in here, and `_rebuildBindings` re-derives the
-    // visible markers/timeline from the current store + window.
-    property real fromTs: NaN
-    property real toTs: NaN
+    // Phase 3.5 / SPEC §11: the visible time window, fed by TimeCursor's
+    // `windowChanged` signal. Both NaN before the cursor commits its first
+    // window (during initial layout); after that they are always finite.
+    property real winT0: NaN
+    property real winT1: NaN
+    property real winTm: NaN
+    property real winW:  NaN
 
     // Detail popup state. Set when the user clicks a marker or row.
     property var selectedRef: null
@@ -107,8 +109,8 @@ Item {
                     Layout.fillWidth: true
                 }
                 Label {
-                    // "5 refs" when no filter active, "3 of 5 refs" when
-                    // the scrubber has narrowed the visible set.
+                    // "5 refs" when the cursor's window holds them all,
+                    // "3 of 5 refs" when the window is narrower.
                     text: {
                         var total = root.entryCount
                         var shown = timelineEntries.count
@@ -131,6 +133,10 @@ Item {
                 model: timelineEntries
                 delegate: ItemDelegate {
                     width: timelineList.width
+                    // Per-row opacity from SPEC §11.5. Precomputed in
+                    // _rebuildBindings so the model already carries it;
+                    // fall back to 1.0 before the cursor has committed.
+                    opacity: model.opacity !== undefined ? model.opacity : 1.0
                     contentItem: ColumnLayout {
                         spacing: 2
                         Label {
@@ -157,7 +163,7 @@ Item {
                 horizontalAlignment: Text.AlignHCenter
                 text: root.entryCount === 0
                       ? "No references yet. Click Submit photo… to add one."
-                      : "No references in the selected time range."
+                      : "No references in this window. Scroll or widen the scale."
                 color: "#888"
                 font.pixelSize: 11
             }
@@ -176,13 +182,10 @@ Item {
         onClicked: submitDialog.open()
     }
 
-    // Phase 3.5 time-range scrubber. A two-handle RangeSlider whose extents
-    // mirror the store's oldest/newest timestamp; the live values drive the
-    // filter window in `_rebuildBindings`. Hidden when the store has fewer
-    // than two refs — there's nothing to scrub across.
+    // SPEC §11 time cursor. Centered-playhead window navigator; owns its
+    // own `tm` and `scalePreset`, emits `windowChanged(t0, t1)` here.
     Frame {
-        id: scrubberFrame
-        visible: root.entryCount >= 2
+        id: cursorFrame
         anchors.left: submitButton.right
         anchors.right: timelineFrame.left
         anchors.bottom: parent.bottom
@@ -197,64 +200,19 @@ Item {
             opacity: 0.95
         }
 
-        ColumnLayout {
+        TimeCursor {
+            id: timeCursor
             anchors.fill: parent
-            spacing: 2
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 8
-                Label {
-                    text: "Time range"
-                    font.bold: true
-                    font.pixelSize: 11
-                }
-                Label {
-                    Layout.fillWidth: true
-                    horizontalAlignment: Text.AlignHCenter
-                    text: isFinite(root.fromTs) && isFinite(root.toTs)
-                          ? (TM.formatTimestamp(root.fromTs) + "   →   "
-                             + TM.formatTimestamp(root.toTs))
-                          : ""
-                    font.family: "monospace"
-                    font.pixelSize: 11
-                    color: "#333"
-                }
-                Button {
-                    text: "Reset"
-                    font.pixelSize: 10
-                    padding: 2
-                    enabled: scrubber.first.value > scrubber.from
-                             || scrubber.second.value < scrubber.to
-                    onClicked: {
-                        scrubber.first.value  = scrubber.from
-                        scrubber.second.value = scrubber.to
-                        root.fromTs = NaN
-                        root.toTs   = NaN
-                        root._rebuildBindings()
-                    }
-                }
-            }
-
-            RangeSlider {
-                id: scrubber
-                Layout.fillWidth: true
-                // Bounds widen by 1 s when extents collapse to a point so
-                // RangeSlider doesn't reject identical from/to values; the
-                // visible filter is still the real extent. Reads the
-                // reactive root.storeMin/MaxTs (refreshed by _rebuildBindings).
-                from: isFinite(root.storeMinTs) ? root.storeMinTs : 0
-                to: {
-                    if (!isFinite(root.storeMaxTs)) return 1
-                    return root.storeMaxTs > root.storeMinTs
-                           ? root.storeMaxTs : root.storeMinTs + 1
-                }
-                first.value: from
-                second.value: to
-                snapMode: RangeSlider.NoSnap
-                stepSize: 1   // unix seconds — finer granularity is pointless
-                first.onMoved: root._scrubberMoved()
-                second.onMoved: root._scrubberMoved()
+            refs: root.store.entries
+            entryCount: root.entryCount
+            storeMinTs: root.storeMinTs
+            storeMaxTs: root.storeMaxTs
+            onWindowChanged: function (t0, t1) {
+                root.winT0 = t0
+                root.winT1 = t1
+                root.winTm = (t0 + t1) / 2
+                root.winW  = t1 - t0
+                root._rebuildBindings()
             }
         }
     }
@@ -334,50 +292,52 @@ Item {
     }
 
     // Recompute the ListModel + markers array from the JS store, applying
-    // the active scrubber window (root.fromTs / root.toTs; NaN means no
-    // constraint). Two separate output shapes because:
+    // the time cursor's current window (root.winT0 / winT1) and per-item
+    // opacity from SPEC §11.5. Two separate output shapes because:
     //   - ListView wants a ListModel for delegate binding
     //   - MapItemView (in MapView.qml) wants a plain JS array for `var`
     //     property assignment to trip a binding update
+    //
+    // Before the cursor has emitted its first window (winT0/winT1 NaN),
+    // we show everything at full opacity so the initial paint isn't blank.
     function _rebuildBindings() {
-        // Refresh reactive mirrors first so the scrubber's `from`/`to`
-        // bindings see the new extents before the slider is queried.
         var range = TM.storeTimeRange(root.store)
         root.entryCount = root.store.entries.length
         root.storeMinTs = range ? range.min : NaN
         root.storeMaxTs = range ? range.max : NaN
 
-        var visible = TM.filterByRange(root.store.entries,
-                                       root.fromTs, root.toTs)
+        var haveWindow = isFinite(root.winT0) && isFinite(root.winT1)
+        var visible = haveWindow
+                      ? TM.filterByRange(root.store.entries,
+                                         root.winT0, root.winT1)
+                      : root.store.entries.slice()
         timelineEntries.clear()
         var newMarkers = []
         for (var i = 0; i < visible.length; i++) {
             var e = visible[i]
+            var ts = Number(e.timestamp)
+            var op = haveWindow
+                     ? TM.opacityFor(ts, root.winTm, root.winW)
+                     : 1.0
             timelineEntries.append({
                 content_hash: String(e.content_hash),
-                timestamp:    Number(e.timestamp),
-                geohash:      String(e.geohash)
+                timestamp:    ts,
+                geohash:      String(e.geohash),
+                opacity:      op
             })
             var centroid = _decodeGeohashCentroid(e.geohash)
             if (centroid) {
                 newMarkers.push({
                     contentHash: String(e.content_hash),
-                    timestamp:   Number(e.timestamp),
+                    timestamp:   ts,
                     geohash:     String(e.geohash),
                     latitude:    centroid.latitude,
-                    longitude:   centroid.longitude
+                    longitude:   centroid.longitude,
+                    opacity:     op
                 })
             }
         }
         root.markers = newMarkers
-    }
-
-    // Slider drag callback. Pulls the live handle values into
-    // `fromTs`/`toTs` and re-derives bindings. Called from both handles.
-    function _scrubberMoved() {
-        root.fromTs = scrubber.first.value
-        root.toTs   = scrubber.second.value
-        _rebuildBindings()
     }
 
     // Call into the core's decodeGeohash invokable. Returns

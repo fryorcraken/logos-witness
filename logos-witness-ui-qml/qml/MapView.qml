@@ -108,6 +108,8 @@ Item {
 
         // Display markers. MapItemView is the idiomatic QtLocation
         // marker repeater; rebinding `markers` re-renders.
+        // Per-marker opacity is SPEC §11.5: 1.0 at the cursor midpoint,
+        // 0.15 at the window edges. Defaults to 1.0 when callers omit it.
         MapItemView {
             model: root.markers
             delegate: MapQuickItem {
@@ -115,6 +117,7 @@ Item {
                 anchorPoint.y: markerDot.height / 2
                 coordinate: QtPositioning.coordinate(
                     modelData.latitude, modelData.longitude)
+                opacity: modelData.opacity !== undefined ? modelData.opacity : 1.0
                 sourceItem: Rectangle {
                     id: markerDot
                     width: 12

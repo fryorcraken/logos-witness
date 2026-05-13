@@ -184,13 +184,16 @@ nix develop --command bash -c '
     && ctest --test-dir build --output-on-failure'
 
 # UI helper unit tests — timestamp formatting, submit-args marshalling
-# (Phase 3.3). Exercises SubmitHelpers.js, the canonical version of the
-# arg-marshalling logic that SubmitDialog.qml inlines. Runs offscreen.
+# (Phase 3.3), TimelineModel + TimeCursor (Phase 3.4–3.5). Runs offscreen.
+# QML2_IMPORT_PATH is pinned to the same qtdeclarative store path as the
+# qmltestrunner binary; a multi-version `find` glob picks the wrong
+# qtdeclarative and triggers ABI mismatches when tests import controls.
 cd ../logos-witness-ui-qml
-nix-shell -p qt6.qtdeclarative qt6.qtbase --run '
-  export QML2_IMPORT_PATH=$(dirname $(find /nix/store -path "*qtdeclarative*/qml/QtTest/qmldir" 2>/dev/null | head -1))/..
-  export QT_QPA_PLATFORM=offscreen
-  qmltestrunner -input tests/'
+QTDECL=$(nix eval --raw nixpkgs#qt6.qtdeclarative)
+export QML2_IMPORT_PATH="$QTDECL/lib/qt-6/qml"
+export QT_QPA_PLATFORM=offscreen
+nix shell nixpkgs#qt6.qtdeclarative nixpkgs#qt6.qtbase \
+  --command qmltestrunner -input tests/
 ```
 
 The strip-pipeline residual-metadata gate (`exiftool -a` on stripped

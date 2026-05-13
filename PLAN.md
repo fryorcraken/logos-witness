@@ -3,41 +3,44 @@
 > Companion to `SPEC.md`. Vertical slices, dependency-ordered, sized S/M.
 > Each task has acceptance criteria and a concrete verification step.
 
-## Status (2026-05-12)
+## Status (2026-05-13)
 
 **Done:** Phase 0 (skipped — scaffold pin assumed working), 1.1 / 1.2 / 1.3,
 2.1, 2.2 (bring-up in basecamp; basecamp + lgpm + module-builder pins
 bumped, vendored Qt6 QtLocation/QtPositioning imports, env-wedge launcher),
 3.1, 3.2, 3.3, 3.4 (map + timeline app shell + decode invokables + SPEC §2
-amendment locking decoders into the core surface).
+amendment locking decoders into the core surface), 3.5 (TimeCursor per
+SPEC §11 — centered playhead, day/week/month/year scales, drag-to-pan +
+‹/›/Today step buttons, density curve via Canvas2D area chart, opacity
+ramp on visible markers + rows; helpers + smoke tests under qmltestrunner).
 
-**Re-opened:** 3.5 — first pass shipped a `RangeSlider` (two free
-handles, hard filter). Dogfooding surfaced both a reactivity bug
-(plain-JS array reads not re-evaluating) and, more importantly, that
-the design was thin. SPEC §11 now defines a proper time cursor:
-centered playhead, day/week/month/year scaling, opacity-graded markers,
-YouTube-style density curve. 3.5 below is rewritten against §11.
+**Resume here:** Phase 3 checkpoint review (manual e2e in basecamp:
+submit ≥ 3 photos at deliberately spread times, confirm midpoint
+opaque / edges faint / out-of-window absent, scroll + scale + Today
+exercise; capture README screenshots), then Phase 4 (strip pipeline).
 
-**Resume here:** Phase 3.5 redux — implement SPEC §11 time cursor.
-Once that lands, Phase 3 checkpoint review + Phase 4 (strip pipeline).
-
-**Pending user review** (defer until the rewrite below lands; reviewing
-intermediate scaffolding wastes the user's time):
+**Pending user review** (batched so the user doesn't read intermediate
+states):
 
 - `e0a806b spec(ui): redesign Phase 3.5 time scrubber as a centered-
-  playhead time cursor` — the *spec* (SPEC §11) is review-worthy now.
-  The *code* changes in that commit (`Main.qml`, `TimelineModel.js`,
-  `tests/tst_timeline_model.qml`) are throw-away scaffolding the §11
-  rewrite replaces; review them only *after* the rewrite, and only for
-  the helpers/tests/CI-fix that survive (called out in 3.5's "First
-  pass (closed)" footer).
+  playhead time cursor` — the *spec* (SPEC §11) is the keeper. The
+  *code* in that commit (`Main.qml`, `TimelineModel.js`,
+  `tests/tst_timeline_model.qml`) is throw-away scaffolding superseded
+  by the rewrite below; review only the helpers/tests that survive
+  (`filterByRange`, `storeTimeRange`, `entryCount`/`storeMin/MaxTs`).
 - `b0d874e ci+docs: fix red main from missing test_geohash target;
   expand CLAUDE.md` — orthogonal CI fix + agent-workflow doc; safe to
   review independently.
-
-When the 3.5 rewrite commit lands, append it here as the third item
-and tell the user "ready for review of e0a806b + the rewrite together"
-— review-batching keeps the user out of intermediate states.
+- `<TBD> feat(ui): TimeCursor per SPEC §11 (Phase 3.5 redux)` — the
+  rewrite. Review together with `e0a806b`. Adds `TimeCursor.qml` +
+  `windowFromMidpoint`/`binCounts`/`opacityFor`/`clampMidpoint` JS
+  helpers + qmltest cases for each + a `TimeCursor` smoke test.
+  Replaces the RangeSlider Frame in `Main.qml`; threads per-item
+  opacity through both the timeline ListModel and the map marker
+  delegate (`MapView.qml`). Local qmltest invocation in `README.md`
+  switched from `find …| head -1` to `nix eval --raw` so the pinned
+  QML2_IMPORT_PATH matches the qmltestrunner binary (avoids a
+  6.9.2/6.10.1 ABI mismatch once tests import QtQuick.Controls).
 
 **Notable deviations from the original plan**, documented in commit history
 and reflected in the per-task checkboxes below:
@@ -528,28 +531,28 @@ cursor's "show refs inside [t0, t1]" is exactly that, just driven by a
 midpoint+width derivation rather than two handles.
 
 **Acceptance criteria:**
-- [ ] `TimeCursor.qml` component renders along the bottom, full-width
+- [x] `TimeCursor.qml` component renders along the bottom, full-width
       minus the timeline rail. Scale row sits below the cursor line:
       `[Day] [Week] [Month] [Year]` with one highlighted (default
       `Year`); a `Today` shortcut and `‹` / `›` step buttons.
-- [ ] Midpoint `tm` is bindable; defaults to `now` on first load.
+- [x] Midpoint `tm` is bindable; defaults to `now` on first load.
       Switching scale recenters on current `tm` and updates `W`.
-- [ ] Dragging the cursor strip horizontally pans `tm` (1 px =
+- [x] Dragging the cursor strip horizontally pans `tm` (1 px =
       `W/stripWidthPx` seconds). `‹` / `›` step `tm` by `W/2`.
       `Today` snaps `tm = now`. Bounds enforced per §11.6.
-- [ ] Refs outside `[t0, t1]` are hidden from both map and timeline
+- [x] Refs outside `[t0, t1]` are hidden from both map and timeline
       (drop existing visibility rules in `Main.qml`'s
       `_rebuildBindings`). Counter shows `N of M refs`.
-- [ ] Each visible marker + timeline row gets opacity per
+- [x] Each visible marker + timeline row gets opacity per
       `TimelineModel.opacityFor(ts, tm, W)`: 1.0 at midpoint, 0.15 at
       the edges, linear in between.
-- [ ] Density curve above the cursor line: area chart over
+- [x] Density curve above the cursor line: area chart over
       `binCounts(refs, t0, t1, binCount)`, auto-Y-scaled to the max bin.
       Curve hides cleanly when every bin is zero.
-- [ ] `TimeCursor` emits `windowChanged(t0, t1)` on every
+- [x] `TimeCursor` emits `windowChanged(t0, t1)` on every
       `tm`/`scalePreset` commit; `Main.qml`'s `_rebuildBindings`
       consumes it (replacing the RangeSlider's `_scrubberMoved`).
-- [ ] Reactivity bug from the first 3.5 pass does not recur: the
+- [x] Reactivity bug from the first 3.5 pass does not recur: the
       cursor reads from explicit reactive properties on `Main.qml`
       (`entryCount`, `storeMinTs`, `storeMaxTs`), not from
       `store.entries.length` directly.

@@ -82,6 +82,84 @@ function storeTimeRange(store) {
     return { min: oldest, max: newest };
 }
 
+// SPEC §11.3 scale presets. Width in seconds. Year is the v0 default.
+var SCALE_PRESETS = {
+    "day":   86400,
+    "week":  604800,
+    "month": 2592000,
+    "year":  31536000
+};
+
+// SPEC §11.2: window is symmetric around the midpoint. Returns null on an
+// unknown preset so callers can reject rather than silently default.
+function windowFromMidpoint(tm, scalePreset) {
+    var W = SCALE_PRESETS[scalePreset];
+    if (W === undefined) return null;
+    var m = Number(tm);
+    if (!isFinite(m)) return null;
+    return { t0: m - W / 2, t1: m + W / 2, W: W };
+}
+
+// SPEC §11.4: histogram of `refs` over [t0, t1] in `binCount` bins.
+// Half-open `[bin_start, bin_end)` everywhere except the last bin, which
+// closes on `t1` so exactly-at-t1 refs are included. Returns [] when
+// binCount <= 0 or the interval is degenerate.
+function binCounts(refs, t0, t1, binCount) {
+    var n = Number(binCount) | 0;
+    if (n <= 0) return [];
+    var lo = Number(t0), hi = Number(t1);
+    if (!isFinite(lo) || !isFinite(hi) || hi <= lo) return [];
+    var out = new Array(n);
+    for (var i = 0; i < n; i++) out[i] = 0;
+    if (!refs) return out;
+    var width = hi - lo;
+    for (var j = 0; j < refs.length; j++) {
+        var ts = Number(refs[j].timestamp);
+        if (!isFinite(ts)) continue;
+        if (ts < lo || ts > hi) continue;
+        // Exactly-at-t1 falls in the last bin (closed on the right).
+        var idx;
+        if (ts === hi) {
+            idx = n - 1;
+        } else {
+            idx = Math.floor((ts - lo) / width * n);
+            if (idx < 0) idx = 0;
+            else if (idx >= n) idx = n - 1;
+        }
+        out[idx]++;
+    }
+    return out;
+}
+
+// SPEC §11.5: linear opacity ramp from 1.0 at the midpoint to 0.15 at the
+// edges. Clamped to [0, 1] for out-of-window safety (callers should hide
+// such refs entirely, but the clamp keeps the formula well-defined).
+function opacityFor(ts, tm, W) {
+    var OPACITY_MIN = 0.15;
+    var t = Number(ts), m = Number(tm), w = Number(W);
+    if (!isFinite(t) || !isFinite(m) || !isFinite(w) || w <= 0) return 1.0;
+    var d = Math.abs(t - m) / (w / 2);
+    if (d <= 0) return 1.0;
+    if (d >= 1) return OPACITY_MIN;
+    return 1.0 - d * (1.0 - OPACITY_MIN);
+}
+
+// SPEC §11.6: clamp the midpoint so the user can't scroll a full window
+// past `now` on the right or past `oldest - W/2` on the left. Empty store
+// (oldest=null/NaN) falls back to the right bound only.
+function clampMidpoint(tm, W, oldest, now) {
+    var m = Number(tm), w = Number(W), nowN = Number(now);
+    if (!isFinite(m) || !isFinite(w) || w <= 0 || !isFinite(nowN)) return tm;
+    var rightBound = nowN + w / 2;       // tm + W/2 == now, no future
+    if (m > rightBound) m = rightBound;
+    var oldN = Number(oldest);
+    if (isFinite(oldN)) {
+        var leftBound = oldN - w / 2;
+        if (m < leftBound) m = leftBound;
+    }
+    return m;
+}
+
 // Filter entries to those with `fromTs <= timestamp <= toTs`. Inclusive on
 // both ends so the scrubber at full extent shows everything. A non-finite
 // bound is treated as "no constraint on that side".
