@@ -32,28 +32,90 @@ non-JPEG inputs propagates as `ok=false` to the caller; UI flow
 unchanged; verified by `nix build '.#lgx'` + `ldd`/`nm` confirming
 the strip code and libjpeg-turbo linkage).
 
-**Resume here:** Phase 5.1 — probe `easylibstorage` round-trip
-between two instances. This is the first real-network phase: the
-strip pipeline + hash-only Reference both flow through Storage from
-here forward. Phase 4 ends with: strip implemented (4.1), gate
-enforced by ctest (4.2 — positive + negative test targets), strip
-wired into `submitPhoto` (4.3). The Phase 4 checkpoint
-("bytes that hit Storage in Phase 5 are now safe") is satisfied.
+**Resume here:** Phase 5 needs **SPEC amendment** before
+implementation. The 5.1 probe (no commit, discovery only) found:
 
-Pending non-blocking before Phase 5: code-review pass on the 4.3
-commit (similar to the reviews on 4.1 and 4.2 cc33b15/70ce2b8); the
-4.3 diff is small (one file, ~20 lines) but the change is in the
-trust boundary so worth a second pair of eyes. README quickstart
-+ screenshots checkbox for Phase 3 checkpoint still empty —
-non-blocking.
+1. **`easylibstorage` is not bundled with the current basecamp
+   pin** (`pre-release-b44a5cf-260`). Bundled modules are
+   `capability_module`, `package_downloader`, `package_manager`
+   plus UI plugins. No Storage, no Delivery.
+2. The upstream module is `logos-co/logos-storage-module` (built
+   2026-04-23). Module name is `storage_module`, not
+   `easylibstorage`. Needs adding to `scaffold.toml` as a
+   `[modules.…]` entry (like the witness modules).
+3. **Storage API shape diverges from SPEC §2's mental model:**
+   - SPEC §2 implies `put(bytes) → content_hash` (sync, sha256).
+   - Actual API: chunked `uploadInit → uploadChunk* →
+     uploadFinalize → cid`, or one-shot `uploadUrl(QUrl)` for a
+     file path. Returns a **CID**, not our sha256. Asynchronous,
+     event-driven (`storageUploadDone(success, sessionId, cid)`).
+   - `get` is `downloadToUrl(cid, file_url)` (streams to disk) or
+     `downloadChunks(cid)` (chunks via `storageDownloadProgress`
+     events). Both asynchronous.
+   - Node lifecycle is heavier than implied: `init(jsonCfg) →
+     start() → … → stop() → destroy()`. Bootstrap via SPR.
+
+**SPEC amendment shape** (proposed; do not merge without review):
+- §2 Reference: split `content_hash` into `content_hash` (sha256
+  of stripped bytes, our integrity anchor) AND `storage_cid` (the
+  storage_module CID, the retrieval key). Or redefine
+  `content_hash` as the CID and drop sha256. Tradeoff: CID is
+  IPFS-style and includes hash + multibase encoding — equivalent
+  integrity but not the same alphabet as sha256.
+- §2 Core module surface: `submitPhoto` becomes async (returns a
+  job id) or stays sync by blocking on `storageUploadDone` inside
+  the call. Probably async is cleaner — re-use the same QML signal
+  pattern Phase 3.4 polled for.
+- §7 sandbox: storage_module's `init(jsonCfg)` exposes
+  data-dir/api-port/disc-port — pick the alice/bob defaults that
+  don't collide on a single dev machine.
+
+**Phase 5 re-plan options:**
+A. **Add storage_module to scaffold.toml + amend SPEC + redo
+   5.2/8 with the real API.** Higher fidelity, more work, blocks
+   on the SPEC pass.
+B. **Keep the in-memory stub through v0.1; ship Delivery (Phase 6)
+   on the stub.** Risk per SPEC §10: "v0.1 can ship Delivery-only
+   if Phase 7 blocks" — a similar carve-out for Phase 5 may apply.
+   Lets the live cross-instance feed land without depending on
+   Storage round-trip working.
+C. **Hybrid: use storage_module's file-URL upload path
+   (`uploadUrl`) since we already have a `filePath` in
+   `submitPhoto`, and accept the async-cid pattern.** Sidesteps
+   chunked-upload plumbing for v0.
+
+Recommended: open a SPEC amendment proposing option C with a
+fallback to B if storage_module's UX is too rough in two-instance
+testing.
+
+Pending non-blocking from Phase 4: README quickstart + screenshots
+checkbox for the Phase 3 checkpoint is still empty. Carry into
+the next dogfood pass.
 
 **Code review of `cc33b15`+`70ce2b8` (Phase 4.2):** Done 2026-05-14
 via `agent-skills:code-reviewer`. Verdict: APPROVE with 0 Critical,
 3 Important, 9 Suggestions. Actioned the three Importants in
-the follow-up commit (exit-code contract under `set -eu`, empty-dir
+commit `8ba2567` (exit-code contract under `set -eu`, empty-dir
 treated as gate violation not invocation problem, automated
 negative-test ctest target). Suggestions deferred as low-priority
 or informational; surface again if any bite.
+
+**Code review of `7f1fc9c` (Phase 4.3):** Done 2026-05-14 via
+`agent-skills:code-reviewer`. Verdict: APPROVE with 0 Critical,
+0 Important, 4 Suggestions — all out-of-scope for 4.3 or
+pre-existing patterns:
+- `static_cast<int>` on `qsizetype` is a project-wide pattern
+  with theoretical >2GB truncation risk; sweep when convenient.
+- ~3 redundant `QByteArray`/`std::string` copies in `submitPhoto`;
+  fine at v0 photo sizes, revisit if strip_jpeg grows a
+  `string_view` overload.
+- No plugin-level integration test for `submitPhoto → strip → hash`;
+  defensible for 19 lines of single-assignment glue, but add when
+  Phase 5 Storage integration deserves an integration test anyway.
+- UI renders strip error as raw `JSON.stringify(result)` in
+  SubmitDialog.qml:276; pre-existing, polish in Phase 5/6 by
+  parsing `result.error` cleanly.
+No code changes from this review pass.
 
 The README quickstart + screenshots checkbox in the Phase 3 checkpoint
 is still empty — pick that up either before or alongside 4.2/4.3, not
@@ -867,22 +929,50 @@ visible UI.
 First real-network phase. Replaces the stub blob store; in-memory Ref
 metadata persists for now.
 
-### Task 5.1: Probe `easylibstorage` round-trip
+### Task 5.1: Probe `easylibstorage` round-trip ⚠ FINDINGS — BLOCKED ON SPEC AMENDMENT
 
 **Description:** Two-instance harness: put a 5 MB blob, retrieve it from
 the second instance. Measure latency, confirm reachability, characterise
 the failure mode for an unreachable blob.
 
-**Acceptance criteria:**
-- [ ] Two instances on the same machine round-trip a 5 MB blob in < 10 s
-- [ ] Failure mode for unreachable blob is documented (return code or
-      exception type) — feeds Phase 8
+**Probe outcome (2026-05-14, no commit — discovery only):**
 
-**Verification:** Throwaway harness logs put + get success and timings.
+1. `easylibstorage` is **not bundled with the current basecamp pin**
+   (`pre-release-b44a5cf-260`). Verified by inspecting
+   `~/.cache/logos-scaffold/basecamp/<pin>/app-result/modules/` —
+   contains only `capability_module`, `package_downloader`,
+   `package_manager`. No Storage, no Delivery.
+2. Upstream repo: `logos-co/logos-storage-module` (2026-04-23). The
+   module name is `storage_module` (not `easylibstorage` —
+   SPEC §2 phrasing predates the rename). Adding it requires a
+   `[modules.storage_module]` entry in `scaffold.toml`.
+3. API shape from `src/storage_module_interface.h` diverges from
+   what SPEC §2 anticipates. The differences MUST be reflected in
+   SPEC §2 + §7 before Task 5.2 can write its client code:
 
-**Dependencies:** Phase 0. **Scope:** S. **Risk:** HIGH if availability
-turns out to be flaky — re-shapes Phase 8 priority and may force a SPEC
-amendment.
+| SPEC §2 assumed | storage_module reality |
+| --- | --- |
+| `easylibstorage.put(bytes) → content_hash` | Two paths: (a) chunked `uploadInit → uploadChunk* → uploadFinalize → cid`, sync. (b) `uploadUrl(QUrl) → sessionId`, async; completion via `storageUploadDone(success, sessionId, cid)`. Returns a **CID**, not our sha256. |
+| `easylibstorage.get(content_hash) → bytes` | `downloadToUrl(cid, file_url)` (streams to disk, async, `storageDownloadDone` event) or `downloadChunks(cid)` (chunks via `storageDownloadProgress`). |
+| Module is "always on" | Node lifecycle: `init(jsonCfg) → start() → … → stop() → destroy()`. Config includes `data-dir`, `api-port`, `disc-port`, bootstrap via SPR. |
+| Module name `easylibstorage` | Actual name `storage_module` |
+| Sync, byte-buffer-based | Async, file/URL-based primarily; chunked byte API exists but advanced |
+
+**Acceptance criteria** (was — superseded by findings):
+- [~] Two instances on the same machine round-trip a 5 MB blob in < 10 s
+       **— blocked.** Module not bundled, SPEC §2 needs amending first.
+- [x] Failure mode for unreachable blob is documented — partly: the API
+      surfaces failure via `storageDownloadDone(success=false, …)` and
+      `LogosResult{success, error}` for sync calls. Two-instance
+      reachability failure mode (e.g. "blob never replicated to peer
+      B") needs the actual probe once the module is wired up.
+
+**Verification (this pass):** Documented findings in PLAN.md Status
+block; no commit. Next steps live in that block.
+
+**Dependencies:** Phase 0. **Scope:** S → M (now that storage_module
+needs wiring into scaffold). **Risk realized:** HIGH — SPEC
+amendment required, per the Risk table.
 
 ### Task 5.2: `easylibstorage` client integration
 
