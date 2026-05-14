@@ -917,10 +917,15 @@ visible UI.
 **Dependencies:** 4.1, 4.2, 1.3. **Files:**
 `src/logos_witness_core_plugin.cpp`. **Scope:** S.
 
-### Checkpoint: Phase 4 done
+### Checkpoint: Phase 4 done ✅
 
-- [ ] Strip pipeline + residual-metadata gate enforce SPEC §7.1 by test
-- [ ] Bytes that will hit Storage in Phase 5 are now safe
+- [x] Strip pipeline + residual-metadata gate enforce SPEC §7.1 by test
+      (4.1 strip impl + 4.2 ctest gate with positive + WILL_FAIL
+      negative targets, both passing on every CI run since `cc33b15`).
+- [x] Bytes that will hit Storage in Phase 5 are now safe — `submitPhoto`
+      strips before hashing as of 4.3 (`7f1fc9c`); failing inputs
+      propagate `ok=false` to the caller per SPEC §7.1 "no
+      `--keep-metadata` flag".
 
 ---
 
