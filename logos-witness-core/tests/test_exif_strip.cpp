@@ -64,6 +64,13 @@ std::string read_file(const std::string& path) {
 void write_file(const std::string& path, const std::string& bytes) {
     std::ofstream out(path, std::ios::binary);
     out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    if (!out.good()) {
+        // A silent write failure here would let the Phase 4.2 exiftool gate
+        // see an empty/missing file and report "no markers" — a falsely-clean
+        // result. Abort loudly instead.
+        std::cerr << "fatal: failed to write " << path << "\n";
+        std::exit(2);
+    }
 }
 
 // Pixel-level SHA-256 via libjpeg. Decodes the JPEG, concatenates RGB
@@ -152,12 +159,14 @@ MarkerScan scan_markers(const std::string& bytes) {
         std::uint8_t m = p[i + 1];
         i += 2;
         if (m == 0xD8 || m == 0xD9 || (m >= 0xD0 && m <= 0xD7)) continue;
-        // SOS (0xDA) begins entropy-coded data which is not byte-stuffed
-        // in the marker sense; scan for the next non-RST marker as the
-        // segment end. Simpler: trust the segment length to skip past
-        // SOS's header, then keep scanning — within entropy data the
-        // 0xFF byte-stuff rule means 0xFF 0x00 is data, and the next
-        // real marker will be EOI or a restart we can ignore.
+        // SOS (0xDA) begins entropy-coded data that uses 0xFF byte-stuffing
+        // (0xFF 0x00 = literal 0xFF data byte). Walking the byte stream
+        // past SOS without implementing byte-stuffing semantics risks
+        // false positives — random entropy bits can look like APPn
+        // markers. libjpeg-turbo's encoder never emits APPn/COM after
+        // SOS, so stop scanning here. The Phase 4.2 exiftool gate is
+        // the authoritative check on the rest of the file anyway.
+        if (m == 0xDA) break;
         if (i + 1 >= n) break;
         std::size_t seg_len = (std::size_t(p[i]) << 8) | p[i + 1];
         if (seg_len < 2 || i + seg_len > n) break;
@@ -303,6 +312,7 @@ int main() {
         {"xmp_rich",     "xmp_rich.jpg"},
         {"icc_tagged",   "icc_tagged.jpg"},
         {"thumbnail",    "thumbnail.jpg"},
+        {"maker_notes",  "maker_notes.jpg"},
         {"jfif_comment", "jfif_comment.jpg"},
     };
 

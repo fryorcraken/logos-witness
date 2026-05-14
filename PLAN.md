@@ -38,11 +38,43 @@ The README quickstart + screenshots checkbox in the Phase 3 checkpoint
 is still empty — pick that up either before or alongside 4.2/4.3, not
 blocking.
 
-**Pending user review:** `d083aa6` (Phase 4.1 `exif_strip`) is currently
-out for a `code-reviewer` agent-skill pass (kicked off 2026-05-14,
-running in background); findings + follow-ups land in a separate
-commit once that returns. The 4.2 gate is independent verification
-layered on top, so it ships ahead of the review.
+**Code review of `d083aa6` (Phase 4.1 `exif_strip`):** Done 2026-05-14
+via `agent-skills:code-reviewer`. Verdict: REQUEST CHANGES with 2
+Critical, 4 Important, 7 Suggestions. Findings actioned (see commit
+following `cc33b15`):
+- Critical: `libjpeg` was missing from `metadata.json`
+  `nix.packages.build` / `runtime` — worked by coincidence via the
+  transitive `qt6.qtbase` dep. Added.
+- Critical: SPEC §6 mandates a dedicated MakerNotes (tag 0x927C)
+  fixture; previous coverage relied on `exif_rich.jpg`'s IFD0 tags
+  which don't include MakerNotes. Added `maker_notes.jpg` written
+  via `exiv2` (exiftool refuses Exif.Photo.MakerNote without a
+  known vendor structure) carrying a raw binary blob that resembles
+  Canon serial/lens/firmware fingerprint data; verified the strip
+  drops APP1 wholesale → MakerNotes gone.
+- Important: marker scanner in `test_exif_strip.cpp` was walking past
+  SOS into byte-stuffed entropy data, with a small false-positive
+  risk. Now stops at SOS — libjpeg-turbo never emits APPn/COM after
+  SOS, and the Phase 4.2 exiftool gate covers the rest of the file.
+- Important: JFIF density tuple (X/Y_density, density_unit) passes
+  through `jpeg_copy_critical_parameters` from source to output. Now
+  reset to `0/1/1` (no aspect-ratio info) so every stripped output
+  reports the same density. Defense-in-depth beyond SPEC §7.1.
+- Important: documented the intentional decision to fail-closed on
+  *all* libjpeg warnings (not just corruption codes); the field name
+  `corruption_warnings` overpromises but the behavior matches SPEC
+  §7.1 "when in doubt, reject."
+- Important: added a comment near setjmp clarifying that no
+  non-trivial-destructor C++ object lives between setjmp and the
+  libjpeg calls that longjmp out, satisfying [csetjmp.syn]'s
+  conditional-support rule.
+- Suggestion: `write_file` in the test now fails loud on write error
+  (previously silent — would have let Phase 4.2 see a 0-byte file
+  and report "clean").
+- Deferred: second-decoder pixel verification (ImageMagick `magick
+  compare`) — defense in depth against a libjpeg-turbo coefficient
+  bug that produces wrong-but-consistent pixels. Captured below as
+  a v0.x follow-up.
 
 The earlier UI batch (`e0a806b` SPEC §11 + `d3cfb22` cursor rewrite +
 `b0d874e` CI fix) was reviewed on 2026-05-13; verdict APPROVE with no

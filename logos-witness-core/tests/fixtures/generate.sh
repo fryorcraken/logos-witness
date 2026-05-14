@@ -5,11 +5,14 @@
 # agent (or human) can rebuild them deterministically without guessing what
 # metadata they're meant to carry. Run from this directory:
 #
-#   nix shell nixpkgs#exiftool nixpkgs#imagemagick nixpkgs#colord --command bash generate.sh
+#   nix shell nixpkgs#exiftool nixpkgs#imagemagick nixpkgs#colord nixpkgs#exiv2 --command bash generate.sh
 #
 # Tools used:
 #   - magick   (ImageMagick 7) for the baseline image
 #   - exiftool to embed metadata variants without changing pixel data
+#   - exiv2    to write a raw binary MakerNotes blob (exiftool refuses
+#              to write Exif.Photo.MakerNote without a recognized vendor
+#              structure; exiv2 will write it as Undefined)
 #
 # Each fixture carries one *category* of identifying metadata that the
 # strip pipeline must remove (SPEC §7.1). The `clean.jpg` baseline carries
@@ -26,6 +29,7 @@ require() {
 }
 require magick
 require exiftool
+require exiv2
 
 # Baseline: a 64x64 plasma fractal. Plasma gives non-uniform DCT
 # coefficients (so coefficient-copy strip exercises real data, not all
@@ -104,6 +108,25 @@ exiftool -q -overwrite_original \
     thumbnail.jpg >/dev/null
 rm -f thumb_tmp.jpg
 
+echo "[fixgen] maker_notes.jpg"
+# A dedicated MakerNotes fixture. The previous coverage relied on
+# exif_rich.jpg's IFD0/ExifIFD tags, but MakerNotes (Exif.Photo.MakerNote
+# = tag 0x927C) is a vendor-proprietary subIFD that carries serial
+# numbers / lens identifiers / firmware versions — a real
+# deanonymization vector that SPEC §6 explicitly calls out as a
+# required fixture category. Strip must drop it by virtue of dropping
+# APP1 wholesale; this fixture proves it does. exiftool can't write
+# MakerNote without a known vendor structure, so we use exiv2 to write
+# an Undefined binary blob.
+cp clean.jpg maker_notes.jpg
+exiftool -q -overwrite_original \
+    -EXIF:Make=Canon \
+    -EXIF:Model="Canon EOS R5" \
+    maker_notes.jpg >/dev/null
+mn_payload=$(printf "Canon-MAKER:serial-9876543:lens-EF24-105:firmware-1.6.0:mallory" \
+             | od -An -tu1 | tr -s ' ')
+exiv2 -M "set Exif.Photo.MakerNote Undefined $mn_payload" maker_notes.jpg
+
 echo "[fixgen] jfif_comment.jpg"
 # JPEG COM (0xFFFE) segments hold arbitrary user-supplied text that the
 # `-comment` flag of libjpeg's `cjpeg` and Photoshop write. Strip must
@@ -134,6 +157,13 @@ verify_has_metadata exif_rich.jpg     '^\[(IFD0|ExifIFD|GPS)\]'
 verify_has_metadata xmp_rich.jpg      '^\[XMP'
 verify_has_metadata icc_tagged.jpg    '^\[ICC[-_]'
 verify_has_metadata thumbnail.jpg     'Thumbnail (Image|Length)'
+# exiftool can't parse our raw blob as a known vendor's MakerNotes format
+# (intentional — we don't want this fixture to depend on a real vendor's
+# proprietary parser), so it surfaces as a `[ExifTool] Warning ... Bad
+# MakerNotes directory` line rather than a tag value. The presence of
+# that warning is itself proof MakerNotes (tag 0x927C) was written;
+# stripping APP1 wholesale will remove the underlying bytes.
+verify_has_metadata maker_notes.jpg   '[Bb]ad MakerNotes|MakerNote'
 verify_has_metadata jfif_comment.jpg  'Comment'
 verify_has_metadata jfif_comment.jpg  '^\[IPTC'
 

@@ -23,6 +23,14 @@ namespace {
 // so we can fail closed on truncated / mid-stream-corrupted inputs that
 // libjpeg would otherwise paper over with "premature end of data
 // segment" recovery.
+//
+// Note: msg_level < 0 covers every libjpeg warning, not just corruption
+// (e.g. JWRN_JFIF_MAJOR fires for an unfamiliar JFIF revision number
+// without any silent zero-fill). Treating all warnings as fail-closed
+// is intentional — for a privacy trust boundary, "when in doubt reject"
+// is the right posture; the upstream UI re-prompts the user for a
+// different file. Renaming `corruption_warnings` to `warnings_seen`
+// would be more accurate; left as-is for diff readability.
 struct ErrMgr {
     struct jpeg_error_mgr pub;
     std::jmp_buf jmp;
@@ -87,6 +95,14 @@ StripResult strip_jpeg(const std::string& input) {
 
     // setjmp must happen before any libjpeg call that might error out.
     // Both decompress and compress structs share the same recovery path.
+    //
+    // C++/setjmp interaction: `result` (which owns std::string members)
+    // lives on the calling stack frame and is destroyed by the function's
+    // normal return path. No non-trivial-destructor C++ object is
+    // constructed between setjmp and the longjmp sites below, so the
+    // conditional-support rule in [csetjmp.syn] is satisfied. libjpeg's
+    // internal state lives in cinfo's mem allocator and is released by
+    // the explicit jpeg_destroy_* calls in the recovery blocks.
     if (setjmp(src_err.jmp)) {
         result.ok = false;
         result.error = std::string("libjpeg read error: ") + src_err.message;
@@ -143,6 +159,17 @@ StripResult strip_jpeg(const std::string& input) {
     // through Storage and downstream consumers and JFIF is the safer
     // structural default.
     dstinfo.write_JFIF_header = TRUE;
+    // Defense-in-depth beyond SPEC §7.1: jpeg_copy_critical_parameters
+    // propagates the source's JFIF density tuple (density_unit,
+    // X_density, Y_density). An unusual triple (e.g. 350/350 from
+    // certain phones) is a weak fingerprint. Reset to the JFIF default
+    // "no aspect ratio info" tuple so every stripped output reports
+    // the same density. SPEC §7.1 lists EXIF/XMP/ICC/maker-notes/
+    // thumbnail explicitly; density is not in the call-out but is
+    // structurally identifying enough to zero out for free.
+    dstinfo.density_unit = 0;  // 0 = no units, X/Y_density form aspect ratio only
+    dstinfo.X_density = 1;
+    dstinfo.Y_density = 1;
     dstinfo.write_Adobe_marker = FALSE;
 
     jpeg_write_coefficients(&dstinfo, coef_arrays);

@@ -9,8 +9,8 @@
 
   "nix": {
     "packages": {
-      "build": ["protobuf", "exiftool"],
-      "runtime": ["protobuf"]
+      "build": ["protobuf", "libjpeg", "exiftool"],
+      "runtime": ["protobuf", "libjpeg"]
     },
     "external_libraries": [],
     "cmake": {
