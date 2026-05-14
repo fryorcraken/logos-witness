@@ -3,7 +3,7 @@
 > Companion to `SPEC.md`. Vertical slices, dependency-ordered, sized S/M.
 > Each task has acceptance criteria and a concrete verification step.
 
-## Status (2026-05-13)
+## Status (2026-05-14)
 
 **Done:** Phase 0 (skipped — scaffold pin assumed working), 1.1 / 1.2 / 1.3,
 2.1, 2.2 (bring-up in basecamp; basecamp + lgpm + module-builder pins
@@ -30,13 +30,29 @@ The README quickstart + screenshots checkbox in the Phase 3 checkpoint
 is still empty — pick that up either before or alongside 4.2/4.3, not
 blocking.
 
-**Pending user review** is now empty. The original three-commit batch
-(`e0a806b` SPEC §11 + `d3cfb22` cursor rewrite + `b0d874e` CI fix) was
-reviewed by the `code-reviewer` agent-skill subagent on 2026-05-13;
-verdict APPROVE with no Critical findings. One Important follow-up
-(test brittleness) landed as `4376f53`. A second review pass on the
-datetime-validation dogfood fix (same date) returned APPROVE WITH MINOR
-CHANGES, all addressed in the commit before this status block.
+**Pending user review:** `d083aa6` (Phase 4.1 `exif_strip`) was pushed
+2026-05-13 and CI is green, but has not been through the
+`code-reviewer` agent-skill pass that prior phase-boundary commits got.
+Worth running before 4.2/4.3 layer on top — the strip is in the trust
+boundary (SPEC §7.1) and the libjpeg coefficient-copy path has subtle
+failure modes (silent zero-fill on truncation, JFIF write_JFIF_header
+forcing, free()-on-error ownership) that benefit from a second pair of
+eyes.
+
+The earlier UI batch (`e0a806b` SPEC §11 + `d3cfb22` cursor rewrite +
+`b0d874e` CI fix) was reviewed on 2026-05-13; verdict APPROVE with no
+Critical findings. One Important follow-up (test brittleness) landed
+as `4376f53`. A second review pass on the datetime-validation fix
+(`dc58775`) returned APPROVE WITH MINOR CHANGES, all addressed in that
+same commit.
+
+**Phase 4.1 dogfood (2026-05-14):** Visible UI surface is unchanged by
+4.1 (strip is not yet wired into `submitPhoto` — that's Task 4.3), so
+the dogfood pass was a regression checklist over the prior cursor +
+submit fixes (Today right-edge anchor, two-line tick labels, no marker
+flicker on drag, invalid-date Submit gating) plus a smoke test that the
+plugin still loads with libjpeg linked in. Update this line with the
+outcome once the user reports back.
 
 **Dogfood findings (Phase 3.5, all addressed)** — kept for context so the
 next agent doesn't reopen ground that's been walked:
@@ -66,7 +82,7 @@ next agent doesn't reopen ground that's been walked:
   row. Bumped `axisRow` height 26→46, `cursorStrip` 70→90,
   `TimeCursor.implicitHeight` 110→130; moved axis line to top+8
   inside the row (was vertical-center).
-- `<this commit>` — SubmitDialog silently fell back to the dialog-open
+- `dc58775` — SubmitDialog silently fell back to the dialog-open
   `capturedAt` if the user typed an invalid date like `2026-05-7`
   (regex `validator` rejected partial input, `_recomputeCapturedAt`
   early-returned with no signal). Fixed by replacing the regex
