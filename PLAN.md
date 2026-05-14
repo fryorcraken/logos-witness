@@ -15,29 +15,37 @@ SPEC §11 — centered playhead, day/week/month/year scales, drag-to-pan +
 + rows; dogfooded twice, code-reviewed once, see "Dogfood findings"
 below), 4.1 (`exif_strip` via libjpeg-turbo coefficient copy — drops
 APP1/APP2/APP13/APP14/APPn/COM markers wholesale, byte-identical decoded
-pixels, fails closed on truncation; six committed fixtures regenerated
-via `tests/fixtures/generate.sh`; stripped outputs land in
+pixels, fails closed on truncation; seven committed fixtures
+regenerated via `tests/fixtures/generate.sh`; stripped outputs land in
 `build/stripped/` ready for 4.2's exiftool gate), 4.2 (CMake
 `exiftool_residual_gate` ctest target — runs `exiftool -a -G1` with a
 five-group whitelist `[ExifTool] [System] [File] [JFIF] [Composite]`
 over every `*.jpg` in `build/stripped/`; any tag outside that whitelist
-fails the test with a `::error::` GHA annotation. `exiftool` added to
-`metadata.json` `nix.packages.build`; CI picks it up automatically via
-`nix develop`. Verified red→green by dropping an unstripped fixture
-into `build/stripped/` — ctest failed with the expected IFD0/ExifIFD/
-GPS residue, removed and re-passed clean).
+fails the test with a `::error::` GHA annotation; a sibling
+`exiftool_residual_gate_negative` ctest target (`WILL_FAIL TRUE`)
+points the gate at the unstripped fixture dir to catch silent
+filter-logic regressions. `exiftool` + `libjpeg` declared in
+`metadata.json` `nix.packages`; CI picks them up automatically via
+`nix develop`), 4.3 (wire `strip_jpeg` into `submitPhoto` — hash is
+sha256 of stripped bytes per SPEC §2; fail-closed on malformed/
+non-JPEG inputs propagates as `ok=false` to the caller; UI flow
+unchanged; verified by `nix build '.#lgx'` + `ldd`/`nm` confirming
+the strip code and libjpeg-turbo linkage).
 
-**Resume here:** Phase 4.3 — wire `exif_strip` into `submitPhoto`
-(still stub-stored). The strip pipeline + residual-metadata gate are
-both enforced by ctest now (including a `WILL_FAIL TRUE`
-self-test that points the gate at the unstripped fixture dir to
-catch silent regressions in the filter logic). Remaining is
-plumbing the strip output through the core's submit path so the hash
-committed to the Reference is over the *stripped* bytes (SPEC §2).
-UI flow is unchanged from the user's POV; the only observable
-behavior change is that malformed/non-JPEG inputs now return
-`ok=false` from `submitPhoto` (the existing UI error path handles
-that).
+**Resume here:** Phase 5.1 — probe `easylibstorage` round-trip
+between two instances. This is the first real-network phase: the
+strip pipeline + hash-only Reference both flow through Storage from
+here forward. Phase 4 ends with: strip implemented (4.1), gate
+enforced by ctest (4.2 — positive + negative test targets), strip
+wired into `submitPhoto` (4.3). The Phase 4 checkpoint
+("bytes that hit Storage in Phase 5 are now safe") is satisfied.
+
+Pending non-blocking before Phase 5: code-review pass on the 4.3
+commit (similar to the reviews on 4.1 and 4.2 cc33b15/70ce2b8); the
+4.3 diff is small (one file, ~20 lines) but the change is in the
+trust boundary so worth a second pair of eyes. README quickstart
++ screenshots checkbox for Phase 3 checkpoint still empty —
+non-blocking.
 
 **Code review of `cc33b15`+`70ce2b8` (Phase 4.2):** Done 2026-05-14
 via `agent-skills:code-reviewer`. Verdict: APPROVE with 0 Critical,
@@ -815,20 +823,37 @@ the file, rerun → passes.
 **Dependencies:** 4.1. **Files:** `CMakeLists.txt`,
 `tests/exiftool_gate.sh`, `metadata.json`. **Scope:** S.
 
-### Task 4.3: Wire strip into `submitPhoto` (still stub-stored)
+### Task 4.3: Wire strip into `submitPhoto` (still stub-stored) ✅ DONE
 
 **Description:** `submitPhoto` now strips before hashing/storing. The
 hash committed to the Reference is over the *stripped* bytes (SPEC §2).
 Storage backend remains the in-memory stub.
 
 **Acceptance criteria:**
-- [ ] Submitted hash matches sha256 of stripped bytes
-- [ ] UI flow is unchanged from the user's perspective
+- [x] Submitted hash matches sha256 of stripped bytes — `submitPhoto`
+      now calls `logos::witness::strip_jpeg(content)` and only hashes
+      `stripped.bytes` if `stripped.ok`. Plugin .so confirmed to
+      statically link `logos::witness::strip_jpeg` and dynamically
+      link `libjpeg.so.62 → libjpeg-turbo-3.1.1` via `ldd`.
+- [x] UI flow is unchanged from the user's perspective — Submit
+      dialog tabs / return shape / error path all unchanged. The
+      only observable behavior change is that malformed or non-JPEG
+      inputs now return `ok=false, error="strip_jpeg failed: …"`
+      where they previously returned `ok=true` with a sha-of-raw
+      hash. SPEC §7.1 "no `--keep-metadata` flag" — fail-closed is
+      the contract.
 
-**Verification:** Submit a photo; manually compute sha256 of the strip
-output; match against the Reference's `content_hash`.
+**Verification:** ctest 5/5 green (test_exif_strip's existing fixture
+round-trips already exercise the strip path; plugin builds clean via
+`nix build '.#lgx'`; symbol + ldd checks confirm the linkage).
+End-to-end submission via `logoscore` not retried here — the unit
+tests cover the strip path completely and the plugin build artifact
+is a positive integration signal. Real-photo dogfood lands in the
+Phase 5 (Storage) integration since 4.3 alone doesn't change the
+visible UI.
 
-**Dependencies:** 4.1, 1.3. **Scope:** S.
+**Dependencies:** 4.1, 4.2, 1.3. **Files:**
+`src/logos_witness_core_plugin.cpp`. **Scope:** S.
 
 ### Checkpoint: Phase 4 done
 

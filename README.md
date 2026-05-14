@@ -36,7 +36,7 @@ implementations without disturbing callers.
 
 | Concern                  | Today                                 | After Phase…                |
 | ------------------------ | ------------------------------------- | --------------------------- |
-| EXIF / metadata strip    | none — sha256 of raw bytes            | Phase 4                     |
+| EXIF / metadata strip    | strip_jpeg → sha256 of stripped bytes | shipped Phase 4.1–4.3       |
 | Photo storage            | nothing stored, just a hash           | Phase 5 (Logos Storage)     |
 | Cross-instance discovery | none — single process only            | Phase 6 (Delivery pub/sub)  |
 | On-chain inscription     | `flushBatch` is a no-op stub          | Phase 7 (zone-sdk)          |
@@ -213,12 +213,14 @@ precision is fixed at 8 (~20 m).
 
 The strip pipeline is fail-closed: any failure to verify that EXIF,
 XMP, ICC, maker-notes, and embedded thumbnails are gone aborts the
-upload. There is no `--keep-metadata` flag. The Phase 4.1/4.2 work
-ships the strip implementation (libjpeg-turbo coefficient copy,
-byte-identical decoded pixels) and the residual-metadata gate; Phase
-4.3 wires the strip into `submitPhoto` so the `content_hash` is over
-stripped bytes. Until 4.3 lands, the in-memory stub still hashes raw
-bytes — the hash shape will change once 4.3 wires through.
+upload. There is no `--keep-metadata` flag. Phase 4.1 ships the
+strip itself (libjpeg-turbo coefficient copy, byte-identical decoded
+pixels), Phase 4.2 the residual-metadata gate (`exiftool -a` with
+a five-group whitelist, plus an automated negative self-test), and
+Phase 4.3 wires the strip into `submitPhoto` so `content_hash` is
+sha256 of stripped bytes. Malformed or non-JPEG inputs propagate as
+`ok=false` to the caller — the UI's existing error path surfaces
+that.
 
 ### Map tiles: a known v0 compromise
 

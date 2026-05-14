@@ -5,6 +5,7 @@
 #include <QDebug>
 #include <QFile>
 
+#include "exif_strip.h"
 #include "geohash.h"
 #include "logos_api.h"
 #include "logos_api_client.h"
@@ -69,9 +70,21 @@ QVariantMap LogosWitnessCorePlugin::submitPhoto(const QString& filePath,
     f.close();
     if (content.isEmpty()) return errorMap("empty file: " + filePath);
 
-    // STUB: hashing the unstripped bytes. Phase 4 replaces with
-    // exif_strip(content) → hash(stripped). Storage upload is Phase 5.
-    const QByteArray hash = QCryptographicHash::hash(content, QCryptographicHash::Sha256);
+    // SPEC §7.1 / §2: content_hash is sha256 of the *stripped* bytes,
+    // never the raw file. strip_jpeg is fail-closed — malformed input,
+    // non-JPEG bytes, or truncated data return ok=false with no partial
+    // output, and submitPhoto surfaces the error to the caller.
+    // Phase 5 will replace the in-memory hash-only store with a Storage
+    // upload of the same stripped bytes.
+    const auto stripped = logos::witness::strip_jpeg(
+        std::string(content.constData(), static_cast<size_t>(content.size())));
+    if (!stripped.ok) {
+        return errorMap("strip_jpeg failed: " + QString::fromStdString(stripped.error));
+    }
+    const QByteArray strippedBytes(stripped.bytes.data(),
+                                   static_cast<int>(stripped.bytes.size()));
+    const QByteArray hash = QCryptographicHash::hash(strippedBytes,
+                                                     QCryptographicHash::Sha256);
 
     logos::witness::v1::Reference ref;
     ref.set_schema_version(kSchemaVersion);
