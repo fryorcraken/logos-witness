@@ -29,10 +29,23 @@ GPS residue, removed and re-passed clean).
 
 **Resume here:** Phase 4.3 — wire `exif_strip` into `submitPhoto`
 (still stub-stored). The strip pipeline + residual-metadata gate are
-both enforced by ctest now; remaining is plumbing the strip output
-through the core's submit path so the hash committed to the Reference
-is over the *stripped* bytes (SPEC §2). UI flow should be unchanged
-from the user's perspective.
+both enforced by ctest now (including a `WILL_FAIL TRUE`
+self-test that points the gate at the unstripped fixture dir to
+catch silent regressions in the filter logic). Remaining is
+plumbing the strip output through the core's submit path so the hash
+committed to the Reference is over the *stripped* bytes (SPEC §2).
+UI flow is unchanged from the user's POV; the only observable
+behavior change is that malformed/non-JPEG inputs now return
+`ok=false` from `submitPhoto` (the existing UI error path handles
+that).
+
+**Code review of `cc33b15`+`70ce2b8` (Phase 4.2):** Done 2026-05-14
+via `agent-skills:code-reviewer`. Verdict: APPROVE with 0 Critical,
+3 Important, 9 Suggestions. Actioned the three Importants in
+the follow-up commit (exit-code contract under `set -eu`, empty-dir
+treated as gate violation not invocation problem, automated
+negative-test ctest target). Suggestions deferred as low-priority
+or informational; surface again if any bite.
 
 The README quickstart + screenshots checkbox in the Phase 3 checkpoint
 is still empty — pick that up either before or alongside 4.2/4.3, not

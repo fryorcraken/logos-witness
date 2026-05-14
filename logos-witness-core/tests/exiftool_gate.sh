@@ -14,10 +14,19 @@
 #
 # Exit codes:
 #   0 — every file in <stripped-dir> is clean
-#   1 — at least one file retained identifying metadata
-#   2 — invocation problem (missing dir, no fixtures, exiftool missing)
+#   1 — at least one file retained identifying metadata, OR <stripped-dir>
+#       was empty (a strip pipeline that produces no outputs is a SPEC §7.1
+#       regression — a "clean" gate that gates nothing isn't actually clean)
+#   2 — invocation problem (bad argv, missing dir, exiftool not on PATH,
+#       or exiftool itself failed mid-run)
 
-set -eu
+# Deliberately NOT using `set -e` around the per-file exiftool call: under
+# `-e`, `residue=$(exiftool …)` aborts the whole script on exiftool's first
+# nonzero exit, and the script's exit code becomes whatever exiftool
+# returned (typically 1) — indistinguishable from "residue found" in the
+# exit-code contract above. We handle exiftool's exit code explicitly
+# inside the loop instead.
+set -u
 
 if [ $# -ne 1 ]; then
     echo "usage: $0 <stripped-dir>" >&2
@@ -38,21 +47,31 @@ fi
 shopt -s nullglob
 files=("$DIR"/*.jpg)
 if [ ${#files[@]} -eq 0 ]; then
-    echo "exiftool_gate: no *.jpg in $DIR — did test_exif_strip run?" >&2
-    exit 2
+    # Empty input set is a gate violation, not an invocation problem:
+    # something upstream produced zero strip outputs and the gate would
+    # otherwise pass-vacuously. Surface as `::error::` so CI annotations
+    # render this in the Checks tab.
+    echo "::error::exiftool_gate: no *.jpg in $DIR — strip pipeline produced no outputs"
+    exit 1
 fi
 
 fail=0
 for f in "${files[@]}"; do
     # --GROUP:all excludes the group from the readout. What remains is
     # tags from any group we did NOT whitelist.
-    residue=$(exiftool -a -G1 \
-                       --ExifTool:all \
-                       --System:all \
-                       --File:all \
-                       --JFIF:all \
-                       --Composite:all \
-                       "$f")
+    if ! residue=$(exiftool -a -G1 \
+                            --ExifTool:all \
+                            --System:all \
+                            --File:all \
+                            --JFIF:all \
+                            --Composite:all \
+                            "$f"); then
+        # exiftool itself failed (binary missing mid-run, OOM, unreadable
+        # file, etc.) — this is an invocation problem distinct from
+        # finding residue. Exit immediately so the contract is preserved.
+        echo "::error::exiftool_gate: exiftool exited nonzero on $(basename "$f")" >&2
+        exit 2
+    fi
     if [ -n "$residue" ]; then
         echo "::error::exiftool_gate: residual metadata in $(basename "$f"):"
         echo "$residue"

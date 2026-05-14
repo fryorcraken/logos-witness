@@ -116,6 +116,22 @@ if(BUILD_TESTING)
             DEPENDS exif_strip
             REQUIRED_FILES "${CMAKE_CURRENT_BINARY_DIR}/stripped"
         )
+
+        # Negative self-test: point the gate at the *unstripped* fixture
+        # directory (every fixture there is built to carry identifying
+        # metadata, see tests/fixtures/generate.sh). The gate must report
+        # residue and exit nonzero. Guards against silent regressions in
+        # the filter logic — e.g. an earlier draft of the script used
+        # `-Group:all=` (the write syntax, which clobbers files and emits
+        # no output) instead of `--Group:all` (the read filter); without
+        # this self-test that bug would have gone unnoticed indefinitely.
+        add_test(NAME exiftool_residual_gate_negative
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/exiftool_gate.sh
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures
+        )
+        set_tests_properties(exiftool_residual_gate_negative PROPERTIES
+            WILL_FAIL TRUE
+        )
     else()
         message(WARNING
             "exiftool not found — skipping Phase 4.2 residual-metadata gate. "
