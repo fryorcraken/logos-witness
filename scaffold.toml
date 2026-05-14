@@ -38,6 +38,17 @@ role = "project"
 flake = "path:./logos-witness-ui-qml#lgx"
 role = "project"
 
+# storage_module — upstream Qt6/lgx wrapper around libstorage (Nim).
+# Required by Phase 5 (SPEC §2.1). Pinned at master HEAD `b1d82a32…`
+# as of 2026-05-14: confirmed locally to build clean against our
+# basecamp pin (manifest v0.2.0 with integrity hashes, libstorage.so
+# pure-libc, no Qt ABI conflict with our 6.9.2 vendor). Bundle is
+# ~14 MB (libstorage carries the Nim runtime) so first install adds
+# ~10 s; cached after that.
+[modules.storage_module]
+flake = "github:logos-co/logos-storage-module#lgx"
+role = "dependency"
+
 [wallet]
 home_dir = ".scaffold/wallet"
 

@@ -25,9 +25,10 @@ Photos only in v0. Video extends the same loop later.
 Logos Witness is a basecamp application composed of two LGX modules:
 
 - **`logos_witness_core`** — non-UI core module (Qt 6 / C++17). Owns the EXIF
-  strip pipeline, the Storage upload client (`easylibstorage`), the Delivery
-  publisher and subscriber, the local pending-inscription queue, and the
-  manual batch inscriber (`zone-sdk`). Runs in `logos_host`.
+  strip pipeline, the Storage upload/download client (calls
+  `storage_module` via `LogosAPI`; see §2.1), the Delivery publisher and
+  subscriber, the local pending-inscription queue, and the manual batch
+  inscriber (`zone-sdk`). Runs in `logos_host`.
 - **`logos_witness_ui_qml`** — QML UI module. File picker, geohash-on-map
   selector, timestamp confirm, submit button, live map+timeline view. Calls
   the core module via `logos.callModule()` and subscribes to its signals.
@@ -45,9 +46,12 @@ the repo's `scaffold.toml`. Inter-module communication happens through the
     ↓                                                              │
 [core: strip EXIF/XMP/ICC/maker-notes; verify with exiftool]       │
     ↓                                                              │
-[core: easylibstorage.put(stripped_bytes) → content_hash]          │
+[core: sha256(stripped_bytes) → content_hash]                      │
     ↓                                                              │
-[core: build protobuf Reference message {v, h, t, g}]              │
+[core: storage_module.uploadUrl(file://tmp/stripped.jpg)            │
+       → wait for storageUploadDone event → storage_cid]            │
+    ↓                                                              │
+[core: build protobuf Reference message {v, h, cid, t, g}]         │
     ↓                                                              │
 [core: Delivery.publish(global topic, Reference bytes)] ──────────→[other peers'
     ↓                                                                feeds light up]
@@ -65,7 +69,10 @@ the repo's `scaffold.toml`. Inter-module communication happens through the
     ↓
 [core: signals UI on changes]
     ↓
-[UI: map renders markers; timeline renders entries; click → fetch blob from Storage]
+[UI: map renders markers; timeline renders entries; click →
+     core.fetchPhoto(cid) → storage_module.downloadToUrl(cid, file://…)
+     → wait for storageDownloadDone → file:// URL returned to UI →
+     QML Image renders it]
     ↓
 [Storage blob unreachable] → UI renders marker as "unavailable" (greyed)
 ```
@@ -84,6 +91,76 @@ Manual trigger only in v0 — the signing / transaction-submit interface is
 unstable and a hands-on flush keeps determinism. Automatic batching is a v1
 decision once the tx interface settles.
 
+### 2.1 Storage integration
+
+Storage is provided by the upstream `logos-co/logos-storage-module` LGX —
+a Qt6 wrapper around `libstorage` (Nim). It is registered in
+`scaffold.toml` and installed into each profile by `lgs basecamp
+install` alongside the witness modules. The earlier SPEC name
+`easylibstorage` was the pre-rename label and survives only as the C
+backing library inside `storage_module`; the Q_INVOKABLE module we call
+is `storage_module` (interface `org.logos.StorageModuleInterface`).
+
+`logos_witness_core` is the only consumer; the UI module does not call
+Storage directly. The core invokes Storage via `LogosAPI::invokeRemote
+Method("storage_module", …)` and subscribes to its events via the same
+`onEventResponse` slot pattern used elsewhere.
+
+**Node lifecycle.** `storage_module` is a stateful Logos node, not a
+stateless RPC. The core module owns its lifecycle:
+
+1. On `initLogos`, call `storage_module.init(jsonCfg)` once. Config
+   shape is the canonical `storage_config.json` (per-instance
+   `data-dir`, `disc-port`, `api-port`; `bootstrap-node` populated
+   from the peer's SPR for non-first instances).
+2. Call `storage_module.start()` and await the `storageStart` event.
+3. Until `storageStart`, `submitPhoto` returns `{ok:false, error:
+   "storage not ready"}` — this is a normal cold-start window, not
+   an error condition.
+4. On module unload, `stop()` + `destroy()`.
+
+**Upload path** (`submitPhoto`):
+
+1. Strip per §7.1 (sha256 on stripped bytes = `content_hash`).
+2. Write stripped bytes to a per-submit tempfile under the profile's
+   cache dir.
+3. Call `storage_module.uploadUrl(QUrl::fromLocalFile(tmpPath))` —
+   returns a sessionId synchronously.
+4. Block (inside `submitPhoto`) on the `storageUploadDone(success,
+   sessionId, cid)` event matching that sessionId. The UI's existing
+   "Submit may block briefly" affordance covers this; v1 may swap
+   for an async `pending` reply.
+5. On success, store `cid` in the Reference's new `storage_cid`
+   field and proceed with Delivery + queue.
+6. On failure, return `{ok:false, error: <event message>}`. Strip
+   tempfile is unlinked unconditionally.
+
+**Download path** (new `fetchPhoto(cid)` invokable):
+
+1. UI marker-click handler calls `core.fetchPhoto(cid)`.
+2. Core checks an in-process cache `cid → local file path`. Hit → return
+   immediately. Miss → continue.
+3. Compute destination path `<cache>/photos/<cid>.jpg`. Call
+   `storage_module.downloadToUrl(cid, QUrl::fromLocalFile(dest))`.
+4. Block on `storageDownloadDone(success, sessionId, message)`
+   matching the returned sessionId.
+5. On success, populate the cache, return `{ok:true, file_url:
+   "file://…"}`. UI sets `Image.source = file_url`.
+6. On failure (timeout, peer unreachable, blob missing), return
+   `{ok:false, error: <message>}`. UI greys the marker per Phase 8
+   missing-blob UX.
+
+**Why a `cid` *and* a `content_hash`.** The `content_hash` is sha256 of
+the bytes we strip locally — an integrity anchor we own end-to-end. The
+`storage_cid` is the retrieval address minted by Storage's chunked
+DAG (IPFS-style multihash over a Merkle tree of fixed-size blocks).
+The CID is opaque to us and not equal to the sha256 of the file bytes;
+it depends on chunk size and DAG layout. Carrying both fields lets us
+(a) verify retrieved bytes hash back to the original — defense against
+a malicious Storage peer serving substituted content — and (b) use
+`content_hash` as the dedupe key in the Delivery / chain-scan merge,
+which is stable across upload paths in a way the CID is not.
+
 ### Core module surface
 
 The Q_INVOKABLE surface on `LogosWitnessCoreInterface` is the contract that
@@ -91,8 +168,13 @@ the UI module and any `logoscore`/CLI consumer programs against. It splits
 into two groups:
 
 - **Behavioural** (state-changing or store-reading):
-  - `submitPhoto(filePath, timestamp, geohash) → {ok, error?, content_hash?}`
-  - `listInscriptions(filter?) → [Reference, …]`
+  - `submitPhoto(filePath, timestamp, geohash) → {ok, error?, content_hash?, storage_cid?}`
+    — return shape gains `storage_cid` per §2.1.
+  - `fetchPhoto(cid) → {ok, error?, file_url?}` — async-internally,
+    sync-externally; the file_url points at a per-process cache
+    location populated from Storage. See §2.1 download path.
+  - `listInscriptions(filter?) → [Reference, …]` — each Reference now
+    includes `storage_cid` as a string field.
   - `flushBatch() → {ok, error?, flushed?}`
   - `subscribeFeed() → void` (idempotent opt-in to the live feed; signals follow)
 - **Wire-format decoders** (pure functions over wire-format bytes):
@@ -140,6 +222,7 @@ message Reference {
   bytes  content_hash   = 2;  // sha256(stripped photo bytes), 32B
   uint64 timestamp      = 3;  // unix seconds, user-confirmed
   string geohash        = 4;  // precision 8 (~20m)
+  string storage_cid    = 5;  // Logos Storage CID for retrieval (added 2026-05-14)
 }
 
 // Batched on-chain inscription payload.
@@ -148,10 +231,19 @@ message ReferenceBatch {
 }
 ```
 
-Field numbers 1–4 are locked. Future fields (e.g., `media_type`,
+Field numbers 1–5 are locked. Future fields (e.g., `media_type`,
 `content_class`) take new field numbers and MUST be additive only —
 renaming or repurposing existing numbers is a `schema_version` bump.
 Decoders MUST tolerate unknown fields (proto3 default behaviour).
+
+`storage_cid` was added in the 2026-05-14 §2.1 amendment when Phase 5
+discovery surfaced that `storage_module`'s CID is not equal to
+sha256(file). Older `Reference` messages (none on-chain yet at the
+amendment time — Phase 7 hasn't shipped) will deserialize with
+`storage_cid == ""`; consumers MUST treat empty as "no Storage
+retrieval address known" and fall back to the missing-blob path.
+`schema_version` stays at `1`: this is an additive field, not a
+schema break.
 
 ### Delivery content topic
 
