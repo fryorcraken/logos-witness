@@ -96,4 +96,30 @@ if(BUILD_TESTING)
     )
     file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/stripped)
     add_test(NAME exif_strip COMMAND test_exif_strip)
+
+    # SPEC §7.1 / Phase 4.2 — residual-metadata gate. Independent
+    # verification (exiftool over the strip outputs) layered on top of
+    # the marker-scan inside test_exif_strip; this is what catches
+    # implementation bugs where a marker is preserved by mistake or
+    # libjpeg-turbo writes APPn metadata we didn't ask for.
+    find_program(EXIFTOOL_EXECUTABLE NAMES exiftool)
+    if(EXIFTOOL_EXECUTABLE)
+        add_test(NAME exiftool_residual_gate
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/exiftool_gate.sh
+                    ${CMAKE_CURRENT_BINARY_DIR}/stripped
+        )
+        # The gate consumes the outputs that exif_strip writes; ctest's
+        # DEPENDS only sets ordering (no implicit fail-fast). Pair with
+        # REQUIRED_FILES so a missing dir surfaces as a clean error
+        # before exiftool sees nothing.
+        set_tests_properties(exiftool_residual_gate PROPERTIES
+            DEPENDS exif_strip
+            REQUIRED_FILES "${CMAKE_CURRENT_BINARY_DIR}/stripped"
+        )
+    else()
+        message(WARNING
+            "exiftool not found — skipping Phase 4.2 residual-metadata gate. "
+            "Install exiftool (already in metadata.json nix.packages.build) "
+            "and re-run cmake to enable.")
+    endif()
 endif()

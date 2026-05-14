@@ -17,27 +17,32 @@ below), 4.1 (`exif_strip` via libjpeg-turbo coefficient copy — drops
 APP1/APP2/APP13/APP14/APPn/COM markers wholesale, byte-identical decoded
 pixels, fails closed on truncation; six committed fixtures regenerated
 via `tests/fixtures/generate.sh`; stripped outputs land in
-`build/stripped/` ready for 4.2's exiftool gate).
+`build/stripped/` ready for 4.2's exiftool gate), 4.2 (CMake
+`exiftool_residual_gate` ctest target — runs `exiftool -a -G1` with a
+five-group whitelist `[ExifTool] [System] [File] [JFIF] [Composite]`
+over every `*.jpg` in `build/stripped/`; any tag outside that whitelist
+fails the test with a `::error::` GHA annotation. `exiftool` added to
+`metadata.json` `nix.packages.build`; CI picks it up automatically via
+`nix develop`. Verified red→green by dropping an unstripped fixture
+into `build/stripped/` — ctest failed with the expected IFD0/ExifIFD/
+GPS residue, removed and re-passed clean).
 
-**Resume here:** Phase 4.2 (CMake `exiftool` residual-metadata gate).
-The strip itself is in place; 4.2 wires `exiftool -a` over every file
-in `build/stripped/` and fails ctest on any identifying tag. Needs
-exiftool added to the dev shell (currently not in the flake's
-`nativeBuildInputs`) and a CI step that calls the gate. After 4.2 lands,
-Task 4.3 wires strip into `submitPhoto`.
+**Resume here:** Phase 4.3 — wire `exif_strip` into `submitPhoto`
+(still stub-stored). The strip pipeline + residual-metadata gate are
+both enforced by ctest now; remaining is plumbing the strip output
+through the core's submit path so the hash committed to the Reference
+is over the *stripped* bytes (SPEC §2). UI flow should be unchanged
+from the user's perspective.
 
 The README quickstart + screenshots checkbox in the Phase 3 checkpoint
 is still empty — pick that up either before or alongside 4.2/4.3, not
 blocking.
 
-**Pending user review:** `d083aa6` (Phase 4.1 `exif_strip`) was pushed
-2026-05-13 and CI is green, but has not been through the
-`code-reviewer` agent-skill pass that prior phase-boundary commits got.
-Worth running before 4.2/4.3 layer on top — the strip is in the trust
-boundary (SPEC §7.1) and the libjpeg coefficient-copy path has subtle
-failure modes (silent zero-fill on truncation, JFIF write_JFIF_header
-forcing, free()-on-error ownership) that benefit from a second pair of
-eyes.
+**Pending user review:** `d083aa6` (Phase 4.1 `exif_strip`) is currently
+out for a `code-reviewer` agent-skill pass (kicked off 2026-05-14,
+running in background); findings + follow-ups land in a separate
+commit once that returns. The 4.2 gate is independent verification
+layered on top, so it ships ahead of the review.
 
 The earlier UI batch (`e0a806b` SPEC §11 + `d3cfb22` cursor rewrite +
 `b0d874e` CI fix) was reviewed on 2026-05-13; verdict APPROVE with no
@@ -731,20 +736,39 @@ missing data segments via `msg_level < 0` warnings rather than calling
 `tests/fixtures/*.jpg`, `tests/test_exif_strip.cpp`. **Scope:** M.
 **Risk:** MEDIUM — embedded thumbnails sometimes survive naive strips.
 
-### Task 4.2: CMake `exiftool` residual-metadata gate
+### Task 4.2: CMake `exiftool` residual-metadata gate ✅ DONE
 
 **Description:** Wire the test target so `ctest` invokes `exiftool -a`
 over every produced fixture and fails the build on any identifying tag.
 This is the SPEC §7.1 enforcement.
 
 **Acceptance criteria:**
-- [ ] `ctest` runs `exiftool` on stripped outputs and fails on residue
-- [ ] CI surfaces the failure clearly (not buried in logs)
+- [x] `ctest` runs `exiftool` on stripped outputs and fails on residue
+- [x] CI surfaces the failure clearly (not buried in logs) — residue
+      lines are prefixed with `::error::` so they render as GHA
+      annotations rather than buried log lines.
 
 **Verification:** Inject a fixture that intentionally retains EXIF; ctest
-fails. Remove fixture; ctest passes.
+fails. Remove fixture; ctest passes. Done locally pre-commit:
+`cp tests/fixtures/exif_rich.jpg build/stripped/SABOTAGE.jpg && ctest
+-R exiftool_residual_gate` → fails with IFD0/ExifIFD/GPS residue; remove
+the file, rerun → passes.
 
-**Dependencies:** 4.1. **Files:** `CMakeLists.txt`, `tests/...`. **Scope:** S.
+**Implementation notes:**
+- Five-group whitelist: `[ExifTool] [System] [File] [JFIF] [Composite]`.
+  Anything outside those is identifying by definition. Filter is
+  `--Group:all` arguments to `exiftool` (a read-side exclusion — earlier
+  attempt used `-Group:all=` which is the *write* syntax and silently
+  clobbers files; corrected before commit).
+- `exiftool` lives in `metadata.json` `nix.packages.build` so `nix
+  develop` picks it up. No CI YAML change needed — the existing
+  `ctest --test-dir build` step inside `nix develop` runs the new
+  test automatically.
+- Gate ordering: `set_tests_properties(... DEPENDS exif_strip)` so the
+  gate sees outputs even under `ctest -j N`.
+
+**Dependencies:** 4.1. **Files:** `CMakeLists.txt`,
+`tests/exiftool_gate.sh`, `metadata.json`. **Scope:** S.
 
 ### Task 4.3: Wire strip into `submitPhoto` (still stub-stored)
 

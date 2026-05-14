@@ -196,8 +196,10 @@ nix shell nixpkgs#qt6.qtdeclarative nixpkgs#qt6.qtbase \
   --command qmltestrunner -input tests/
 ```
 
-The strip-pipeline residual-metadata gate (`exiftool -a` on stripped
-fixtures) lands in Phase 4. CI lands in Phase 9. See
+The strip pipeline and its residual-metadata gate (`exiftool -a` over
+the stripped fixtures with a `[ExifTool] [System] [File] [JFIF]
+[Composite]` whitelist — anything outside fails ctest) are wired into
+`ctest` as of Phase 4.2. Full CI per SPEC §9 lands in Phase 9. See
 [`SPEC.md` §6](./SPEC.md#6-testing-strategy) and
 [`SPEC.md` §9](./SPEC.md#9-ci-and-release).
 
@@ -209,11 +211,14 @@ provided by Logos Core / Delivery transport; the chain entry itself
 carries nothing that links contributions to a single origin. Geohash
 precision is fixed at 8 (~20 m).
 
-The strip pipeline (Phase 4) is fail-closed: any failure to verify that
-EXIF, XMP, ICC, maker-notes, and embedded thumbnails are gone aborts the
-upload. There is no `--keep-metadata` flag. The Phase 1 stub does not
-strip — it only hashes — so the in-memory `content_hash` reflects raw
-bytes for now and will change shape once strip lands.
+The strip pipeline is fail-closed: any failure to verify that EXIF,
+XMP, ICC, maker-notes, and embedded thumbnails are gone aborts the
+upload. There is no `--keep-metadata` flag. The Phase 4.1/4.2 work
+ships the strip implementation (libjpeg-turbo coefficient copy,
+byte-identical decoded pixels) and the residual-metadata gate; Phase
+4.3 wires the strip into `submitPhoto` so the `content_hash` is over
+stripped bytes. Until 4.3 lands, the in-memory stub still hashes raw
+bytes — the hash shape will change once 4.3 wires through.
 
 ### Map tiles: a known v0 compromise
 

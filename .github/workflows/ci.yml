@@ -5,9 +5,13 @@
 #   - README staying current with user-facing surface changes (SPEC §7.5)
 #
 # Phases that haven't shipped yet add their own gates as they land:
-#   - Phase 4: exiftool residual-metadata gate over strip pipeline outputs
 #   - Phase 5+: lgpm install + logoscore round-trip (needs alice/bob profiles)
 #   - Phase 9: full SPEC §9 pipeline (release artefacts via lgs build-portable)
+#
+# Shipped gates:
+#   - Phase 4.1/4.2: exif_strip ctest target + exiftool_residual_gate
+#     (exiftool comes from metadata.json nix.packages.build, picked up by
+#     `nix develop` automatically — no extra step needed below).
 #
 # This canary intentionally does NOT run `lgs basecamp setup` yet — that
 # build chain (basecamp + spel + lgpm) is multi-minute and adds nothing to

@@ -9,7 +9,7 @@
 
   "nix": {
     "packages": {
-      "build": ["protobuf"],
+      "build": ["protobuf", "exiftool"],
       "runtime": ["protobuf"]
     },
     "external_libraries": [],
