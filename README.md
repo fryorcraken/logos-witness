@@ -3,46 +3,50 @@
 # Logos Witness
 
 A basecamp application for publishing anonymous, time- and place-anchored
-photographs to the Logos network. Photos are stripped of all device metadata
-before upload to Logos Storage; references are announced live over Logos
-Delivery and durably committed in batches as on-chain inscriptions via
-`zone-sdk`. Other instances of the app render contributions on a shared
-map+timeline.
+media — photos and videos — to the Logos network. Media is stripped of all
+device metadata before upload to Logos Storage; references are announced
+live over Logos Delivery and durably committed in batches as on-chain
+inscriptions via `zone-sdk`. Other instances of the app render
+contributions on a shared map + timeline.
+
+v0 ships photo support first; video and live capture follow on the same
+pipeline once the photo flow is settled end-to-end.
 
 > **Status:** v0.0.1 (pre-release), 2026-05-15. Phases 1–6 of
-> [`PLAN.md`](./PLAN.md) complete: stripped photos upload to Logos
-> Storage, references propagate live across instances over Logos
-> Delivery, and the UI shows live + offline status, upload progress,
-> and the resolved CID inline. Phases 7 (on-chain inscribe) and 8
-> (missing-blob UX) outstanding before v0.1.0. Photos-only in v0;
-> video and live capture are deferred. See [`SPEC.md`](./SPEC.md) for
-> the authoritative design.
+> [`PLAN.md`](./PLAN.md) complete; Phases 7 (on-chain inscribe) and
+> 8 (missing-blob UX) outstanding before v0.1.0. See
+> [`SPEC.md`](./SPEC.md) for the authoritative design and
+> [`CHANGELOG.md`](./CHANGELOG.md) for release notes.
 
 ## What works today
 
-Submit a stripped JPEG against a geohash-8 pin and a timestamp; the
-core uploads the bytes to Logos Storage, embeds the returned CID in
-the protobuf `Reference`, and broadcasts that `Reference` on the
-single global Delivery topic
-`/logos-witness/1/inscriptions/proto` (waku-derived, runs against
-the public logos.dev fleet). A second instance subscribed to the
-same topic dedupes by `content_hash`, appends the ref to its local
-store, and renders the new marker on the map + a new row on the
-timeline within a few seconds. Clicking a marker fetches the photo
-from Storage and renders it inline (base64 data-url — basecamp's
-sandboxed `QNetworkAccessManager` blocks `file://` Image sources,
-so the bytes have to come through a `data:` URL the core mints).
+Open the app, click **Submit photo…**, pick a JPEG, drop a pin on
+the map, confirm the timestamp, and submit. Within a second or two
+the photo's metadata is stripped, the bytes are uploaded to Logos
+Storage, and a small reference is broadcast on the network.
+Anyone else running the app sees a new marker on their map and a
+new row on their timeline a few seconds later — no servers, no
+accounts, no signups.
 
-The UI carries a Live/Offline pill in the timeline header bound to
-the `deliveryReady()` core invokable, an upload status banner with
-spinner / Retry / "saved locally but not broadcast" affordances,
-and a SPEC §11 time cursor (centered playhead, day/week/month/year
-scale) along the bottom edge.
+What you see on screen:
 
-`flushBatch()` is still a stub — Phase 7 wires it to a real
-on-chain inscription via `zone-sdk`. The `Q_INVOKABLE` interface
-surface is locked from Phase 1.3, so Phase 7+8 swap implementations
-without disturbing callers.
+- A full-window map with a marker for every reference you and your
+  peers have submitted.
+- A timeline panel on the right listing the same references with
+  time, location, and a short CID.
+- A **Live** / **Offline** pill at the top of the timeline showing
+  whether the app is receiving broadcasts from other instances.
+- An upload progress strip while a submission is in flight, with
+  Retry if it fails and a "saved locally — not broadcast" warning
+  if the upload completed but couldn't reach the network.
+- A time slider along the bottom (day / week / month / year scale)
+  that fades out references outside the visible window so the map
+  isn't overwhelmed when there are lots of them.
+- A detail view, on clicking a marker or row, that fetches the
+  photo back from Storage and displays it inline.
+
+Manual batch-to-chain inscription is the one piece still
+outstanding — `flushBatch()` is a stub that lands in Phase 7.
 
 | Concern                  | Today                                                                   | Status                       |
 | ------------------------ | ----------------------------------------------------------------------- | ---------------------------- |
@@ -51,7 +55,7 @@ without disturbing callers.
 | Cross-instance discovery | publish + subscribe via `delivery_module` (waku, logos.dev fleet)       | shipped Phase 6              |
 | On-chain inscription     | `flushBatch` is a no-op stub                                            | Phase 7 (zone-sdk) — pending |
 | Missing-blob UX          | error inline; no greyed-marker fallback                                 | Phase 8 — pending            |
-| User interface           | full submit flow + map/timeline with time cursor, CID display, Live/Offline pill, upload banner | shipped Phases 3 + 5 + 6     |
+| Video + live capture     | not started                                                             | post-v0                      |
 
 ## Architecture at a glance
 
