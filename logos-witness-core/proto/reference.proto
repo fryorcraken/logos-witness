@@ -4,7 +4,7 @@ package logos.witness.v1;
 
 // Single witness reference — wire and on-chain canonical form.
 //
-// Field numbers 1–4 are reserved for the v0 schema. New fields take fresh
+// Field numbers 1–5 are reserved for the v0 schema. New fields take fresh
 // numbers and MUST be additive only; renaming or repurposing existing
 // numbers is a `schema_version` bump (see SPEC §2 / §7.3).
 message Reference {
@@ -12,6 +12,7 @@ message Reference {
   bytes  content_hash   = 2;  // sha256(stripped photo bytes), 32 bytes
   uint64 timestamp      = 3;  // unix seconds, user-confirmed
   string geohash        = 4;  // precision 8 (~20m)
+  string storage_cid    = 5;  // Logos Storage CID for retrieval (added Phase 5)
 }
 
 // Batched on-chain inscription payload (one zone-sdk inscription).

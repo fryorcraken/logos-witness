@@ -19,6 +19,59 @@ pkg_check_modules(PROTOBUF REQUIRED IMPORTED_TARGET protobuf)
 pkg_check_modules(LIBJPEG  REQUIRED IMPORTED_TARGET libjpeg)
 find_program(PROTOC_EXECUTABLE NAMES protoc REQUIRED)
 
+# Run logos-cpp-generator in dev-shell builds (cmake outside nix). The nix
+# build of `.#lgx` populates generated_code/ in its preConfigure phase;
+# without this step, dev-shell ctest can't compile the plugin because
+# storage_module_api.h and logos_sdk.h are missing.
+set(LOGOS_GENERATED_DIR ${CMAKE_CURRENT_SOURCE_DIR}/generated_code)
+if(NOT EXISTS ${LOGOS_GENERATED_DIR}/include/logos_sdk.h)
+    find_program(LOGOS_CPP_GENERATOR logos-cpp-generator
+        HINTS $ENV{LOGOS_CPP_SDK_ROOT}/bin
+        REQUIRED)
+    file(MAKE_DIRECTORY ${LOGOS_GENERATED_DIR})
+    execute_process(
+        COMMAND ${LOGOS_CPP_GENERATOR}
+                --metadata ${CMAKE_CURRENT_SOURCE_DIR}/metadata.json
+                --general-only
+                --output-dir ${LOGOS_GENERATED_DIR}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        RESULT_VARIABLE _gen_rc)
+    if(NOT _gen_rc EQUAL 0)
+        message(FATAL_ERROR "logos-cpp-generator failed (rc=${_gen_rc})")
+    endif()
+    # Mirror mkModuleLib.nix layout: headers under include/, .cpp files
+    # copied into include/ too (LogosModule.cmake's installed-layout
+    # branch hunts both .cpp locations).
+    file(MAKE_DIRECTORY ${LOGOS_GENERATED_DIR}/include)
+    file(GLOB _gen_headers ${LOGOS_GENERATED_DIR}/*.h)
+    foreach(h ${_gen_headers})
+        get_filename_component(_hn ${h} NAME)
+        file(RENAME ${h} ${LOGOS_GENERATED_DIR}/include/${_hn})
+    endforeach()
+    file(GLOB _gen_sources ${LOGOS_GENERATED_DIR}/*.cpp)
+    foreach(c ${_gen_sources})
+        get_filename_component(_cn ${c} NAME)
+        file(RENAME ${c} ${LOGOS_GENERATED_DIR}/include/${_cn})
+    endforeach()
+    # Pull in any include files shipped by declared module dependencies
+    # (storage_module ships storage_module_api.h/.cpp under
+    # packages.<system>.default/include — copy them in). The nix build
+    # gets these via moduleInputs; for dev-shell ctest we shell out to
+    # `nix build` to discover the same path.
+    execute_process(
+        COMMAND nix build --no-link --print-out-paths
+                github:logos-co/logos-storage-module
+        OUTPUT_VARIABLE _sm_path
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE _sm_rc)
+    if(_sm_rc EQUAL 0 AND EXISTS "${_sm_path}/include")
+        file(GLOB _sm_files "${_sm_path}/include/*")
+        file(COPY ${_sm_files} DESTINATION ${LOGOS_GENERATED_DIR}/include)
+    else()
+        message(WARNING "storage_module include dir not resolved; plugin link may fail")
+    endif()
+endif()
+
 set(PROTO_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR})
 set(PROTO_SRC ${PROTO_GEN_DIR}/reference.pb.cc)
 set(PROTO_HDR ${PROTO_GEN_DIR}/reference.pb.h)
@@ -46,6 +99,8 @@ logos_module(
         lib/in_memory_store.cpp
         lib/exif_strip.h
         lib/exif_strip.cpp
+        lib/storage_client.h
+        lib/storage_client.cpp
         ${PROTO_SRC}
         ${PROTO_HDR}
     INCLUDE_DIRS

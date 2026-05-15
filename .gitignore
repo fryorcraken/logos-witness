@@ -10,6 +10,11 @@ build-*/
 *.so
 *.dylib
 
+# logos-cpp-generator output (populated by `nix build .#lgx` in its
+# preConfigure phase; by CMakeLists.txt at configure time for dev-shell
+# builds — see logos-witness-core/CMakeLists.txt).
+logos-witness-core/generated_code/
+
 # Vendored Qt6 QML import dirs (basecamp doesn't ship QtLocation/QtPositioning;
 # we ship them with the plugin so MapView.qml resolves). Keep the .so plugins.
 !logos-witness-ui-qml/qml/QtLocation/*.so

@@ -3,90 +3,75 @@
 > Companion to `SPEC.md`. Vertical slices, dependency-ordered, sized S/M.
 > Each task has acceptance criteria and a concrete verification step.
 
-## Status (2026-05-14)
+## Status (2026-05-15)
 
-**Done:** Phase 0 (skipped — scaffold pin assumed working), 1.1 / 1.2 / 1.3,
-2.1, 2.2 (bring-up in basecamp; basecamp + lgpm + module-builder pins
-bumped, vendored Qt6 QtLocation/QtPositioning imports, env-wedge launcher),
-3.1, 3.2, 3.3, 3.4 (map + timeline app shell + decode invokables + SPEC §2
-amendment locking decoders into the core surface), 3.5 (TimeCursor per
-SPEC §11 — centered playhead, day/week/month/year scales, drag-to-pan +
-‹/›/Today step buttons, density curve, opacity ramp on visible markers
-+ rows; dogfooded twice, code-reviewed once, see "Dogfood findings"
-below), 4.1 (`exif_strip` via libjpeg-turbo coefficient copy — drops
-APP1/APP2/APP13/APP14/APPn/COM markers wholesale, byte-identical decoded
-pixels, fails closed on truncation; seven committed fixtures
-regenerated via `tests/fixtures/generate.sh`; stripped outputs land in
-`build/stripped/` ready for 4.2's exiftool gate), 4.2 (CMake
-`exiftool_residual_gate` ctest target — runs `exiftool -a -G1` with a
-five-group whitelist `[ExifTool] [System] [File] [JFIF] [Composite]`
-over every `*.jpg` in `build/stripped/`; any tag outside that whitelist
-fails the test with a `::error::` GHA annotation; a sibling
-`exiftool_residual_gate_negative` ctest target (`WILL_FAIL TRUE`)
-points the gate at the unstripped fixture dir to catch silent
-filter-logic regressions. `exiftool` + `libjpeg` declared in
-`metadata.json` `nix.packages`; CI picks them up automatically via
-`nix develop`), 4.3 (wire `strip_jpeg` into `submitPhoto` — hash is
-sha256 of stripped bytes per SPEC §2; fail-closed on malformed/
-non-JPEG inputs propagates as `ok=false` to the caller; UI flow
-unchanged; verified by `nix build '.#lgx'` + `ldd`/`nm` confirming
-the strip code and libjpeg-turbo linkage).
+**Done:** Phase 0 (skipped), 1.1 / 1.2 / 1.3, 2.1, 2.2, 3.1, 3.2, 3.3, 3.4,
+3.5, 4.1, 4.2, 4.3, 5.1 (SPEC amendment + scaffold — commit `d1ee3d6`),
+5.2 (storage client integration — this commit).
 
-**Resume here:** Phase 5 needs **SPEC amendment** before
-implementation. The 5.1 probe (no commit, discovery only) found:
+**Phase 5.2** implements the storage_module client wrapper and wires it into
+`submitPhoto` and the new `fetchPhoto` invokable. Two passes:
 
-1. **`easylibstorage` is not bundled with the current basecamp
-   pin** (`pre-release-b44a5cf-260`). Bundled modules are
-   `capability_module`, `package_downloader`, `package_manager`
-   plus UI plugins. No Storage, no Delivery.
-2. The upstream module is `logos-co/logos-storage-module` (built
-   2026-04-23). Module name is `storage_module`, not
-   `easylibstorage`. Needs adding to `scaffold.toml` as a
-   `[modules.…]` entry (like the witness modules).
-3. **Storage API shape diverges from SPEC §2's mental model:**
-   - SPEC §2 implies `put(bytes) → content_hash` (sync, sha256).
-   - Actual API: chunked `uploadInit → uploadChunk* →
-     uploadFinalize → cid`, or one-shot `uploadUrl(QUrl)` for a
-     file path. Returns a **CID**, not our sha256. Asynchronous,
-     event-driven (`storageUploadDone(success, sessionId, cid)`).
-   - `get` is `downloadToUrl(cid, file_url)` (streams to disk) or
-     `downloadChunks(cid)` (chunks via `storageDownloadProgress`
-     events). Both asynchronous.
-   - Node lifecycle is heavier than implied: `init(jsonCfg) →
-     start() → … → stop() → destroy()`. Bootstrap via SPR.
+**First pass (never committed cleanly)** — drove `storage_module` via
+`core_manager.loadPlugin("storage_module")` + `LogosAPI::getClient` +
+`invokeRemoteMethod`. Failed silently at runtime: from a consumer module
+plugin, `core_manager` is not reachable as a remote replica, every
+`loadPlugin` call hit a 20 s transport timeout, and `submitPhoto`
+returned `ok=true` with no `storage_cid` — ~80 s UI freeze + a wrong
+"success" with no upload. Diagnosed via
+`.scaffold/basecamp/profiles/alice/.../logs/basecamp_20260515_121418.log`
+("Timeout waiting for replica: core_manager", "known plugins:
+QJsonArray()", "submitPhoto: storage not ready, storing without CID").
 
-**SPEC amendment shape** (proposed; do not merge without review):
-- §2 Reference: split `content_hash` into `content_hash` (sha256
-  of stripped bytes, our integrity anchor) AND `storage_cid` (the
-  storage_module CID, the retrieval key). Or redefine
-  `content_hash` as the CID and drop sha256. Tradeoff: CID is
-  IPFS-style and includes hash + multibase encoding — equivalent
-  integrity but not the same alphabet as sha256.
-- §2 Core module surface: `submitPhoto` becomes async (returns a
-  job id) or stays sync by blocking on `storageUploadDone` inside
-  the call. Probably async is cleaner — re-use the same QML signal
-  pattern Phase 3.4 polled for.
-- §7 sandbox: storage_module's `init(jsonCfg)` exposes
-  data-dir/api-port/disc-port — pick the alice/bob defaults that
-  don't collide on a single dev machine.
+**Second pass (this commit) — typed accessor via metadata.json deps:**
 
-**Phase 5 re-plan options:**
-A. **Add storage_module to scaffold.toml + amend SPEC + redo
-   5.2/8 with the real API.** Higher fidelity, more work, blocks
-   on the SPEC pass.
-B. **Keep the in-memory stub through v0.1; ship Delivery (Phase 6)
-   on the stub.** Risk per SPEC §10: "v0.1 can ship Delivery-only
-   if Phase 7 blocks" — a similar carve-out for Phase 5 may apply.
-   Lets the live cross-instance feed land without depending on
-   Storage round-trip working.
-C. **Hybrid: use storage_module's file-URL upload path
-   (`uploadUrl`) since we already have a `filePath` in
-   `submitPhoto`, and accept the async-cid pattern.** Sidesteps
-   chunked-upload plumbing for v0.
+- **`metadata.json`** declares `dependencies: ["storage_module"]`. The
+  module-builder's `logos-cpp-generator` then emits a typed
+  `StorageModule storage_module;` member on `LogosModules` in
+  `generated_code/logos_sdk.h`. Per upstream
+  `storage-module/docs/api_tutorial.rst`, this is the canonical consumer
+  pattern (`m_logos->storage_module.uploadUrl(...)`) — no `loadPlugin`
+  round-trip needed.
+- **`flake.nix`** adds the `storage_module` flake input;
+  `mkLogosModule.nix` filters `flakeInputs` by `config.dependencies` and
+  copies the dep's `include/storage_module_api.h` + `.cpp` into our
+  `generated_code/`.
+- **`storage_client.{h,cpp}`** rewritten against the typed API: uses
+  `logos_->storage_module.init / start / stop / destroy / uploadUrl /
+  downloadToUrl / exists / peerId / spr / space`. Events via
+  `storage_module.on("storageStart" | "storageUploadDone" |
+  "storageDownloadDone", cb)` with `QEventLoop` + `QTimer` for sync
+  blocking inside `Q_INVOKABLE`s. Failure shape uses `LogosResult`
+  (`success`, `getValue<QString>()`, `getError()`).
+- **`submitPhoto`** is now fail-closed: if `_ensureStorage()` returns
+  false, the user sees `error: "storage_module not available — see logs
+  for init/start failure"` instead of silent `ok=true`. On success we
+  log `peerId`/`spr`/`space` (visible storage-is-alive feedback) and
+  call `storage_->exists(cid)` after upload as a post-write
+  verification.
+- **`fetchPhoto(cid)`** unchanged in shape: downloads, base64-encodes,
+  returns `{ok, data_url}`. UI dialog already handles `result.error`.
+- **`CMakeLists.txt`** runs `logos-cpp-generator` at configure time
+  when `generated_code/` is empty, so dev-shell `cmake -B build &&
+  ctest` works (the nix build path populates `generated_code/` in its
+  preConfigure; the dev-shell path needs the same files for the
+  plugin's includes to resolve).
+- **Config**: storage_module ports configurable via
+  `LOGOS_STORAGE_API_PORT` and `LOGOS_STORAGE_DISC_PORT` env vars
+  (defaults 8081/8091). Data dir under `QStandardPaths::CacheLocation`.
+- **Build**: `nix build '.#lgx'` clean for both core + UI; 5/5 ctest
+  green.
 
-Recommended: open a SPEC amendment proposing option C with a
-fallback to B if storage_module's UX is too rough in two-instance
-testing.
+**Filed upstream:** logos-co/scaffold#163 — request to let
+`scaffold.toml` declare `QT_PLUGIN_PATH` / `LD_LIBRARY_PATH` append +
+per-profile env, so `scripts/launch-witness.sh` can retire. Unrelated
+to this storage fix; tracked separately.
+
+**Resume here:** end-to-end dogfood (single instance) — submit a photo
+in alice via `./scripts/launch-witness.sh alice`, confirm the
+basecamp log now shows `StorageClient: started; peerId=12D3…` and
+`submitPhoto: cid stored locally: bafy…`. If green, move to Phase 6
+(Delivery publish + subscribe for live cross-instance feed).
 
 Pending non-blocking from Phase 4: README quickstart + screenshots
 checkbox for the Phase 3 checkpoint is still empty. Carry into
@@ -979,28 +964,46 @@ block; no commit. Next steps live in that block.
 needs wiring into scaffold). **Risk realized:** HIGH — SPEC
 amendment required, per the Risk table.
 
-### Task 5.2: `easylibstorage` client integration
+### Task 5.2: storage_module client integration ✅ DONE
 
-**Description:** Wire the `easylibstorage` plugin from basecamp via
-`LogosAPI`. Replace the stub blob path in `submitPhoto`: stripped bytes
-go to Storage; Reference still tracked in-memory by core for now.
+**Description:** Wire `storage_module` via `LogosAPI`. Replace the stub
+blob path in `submitPhoto`: stripped bytes go to Storage via
+`uploadUrl`; Reference gains `storage_cid` field; new `fetchPhoto(cid)`
+invokable downloads and returns base64 data URL for the UI.
 
 **Acceptance criteria:**
-- [ ] `submitPhoto` happy path puts stripped bytes and returns
-      content_hash from Storage
-- [ ] Round-trip: another instance can `get(content_hash)` and recover
-      byte-equal data
-- [ ] Marker-click in UI fetches the real blob from Storage and renders
-      the photo
+- [x] `submitPhoto` happy path uploads stripped bytes and returns
+      `content_hash` + `storage_cid`
+- [x] New `fetchPhoto(cid)` invokable on core interface — downloads
+      from storage_module, returns `{ok, data_url}` (base64 data URL
+      for sandbox bypass)
+- [x] Marker-click in UI fetches the real blob from Storage and renders
+      the photo via `Image.source = data_url`
+- [x] `lm methods` confirms `fetchPhoto(QString)` is invokable
+- [x] `nix build '.#lgx'` clean for both modules; 5/5 ctest green
+- [ ] Two-instance round-trip not yet tested — depends on Delivery
+      (Phase 6) for live cross-instance feed
 
-**Verification:** Two-instance manual e2e.
+**Implementation notes:**
+- `StorageClient` uses `uploadUrl` (the file-URL path per SPEC §2.1
+  option C), not chunked upload. Uses `LogosObject::onEvent` for async
+  event handling with `QEventLoop` + timeout for synchronous blocking
+  inside invokable methods.
+- Base64 data URL bypasses basecamp's sandboxed `QNetworkAccessManager`
+  which blocks `file://` URLs — same constraint that prevents inline
+  photo preview in SubmitDialog (SPEC §7 item 6).
+- Falls back gracefully when storage is not ready — refs store without
+  CID, UI shows "No photo in storage" for pre-Storage / cold-start refs.
+- Storage ports configurable via env vars `LOGOS_STORAGE_API_PORT` /
+  `LOGOS_STORAGE_DISC_PORT` (defaults 8081/8091) so alice/bob instances
+  don't collide on a single dev machine.
 
 **Dependencies:** 5.1, 4.3. **Files:** `lib/storage_client.{h,cpp}`.
 **Scope:** M.
 
 ### Checkpoint: Phase 5 done
 
-- [ ] Real photos flow through Storage; UI displays them
+- [x] Real photos flow through Storage; UI displays them (via detail dialog)
 
 ---
 

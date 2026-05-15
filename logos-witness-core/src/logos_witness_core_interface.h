@@ -20,17 +20,25 @@ class LogosWitnessCoreInterface : public PluginInterface
 public:
     virtual ~LogosWitnessCoreInterface() = default;
 
-    // Pick a photo, anchor it to a user-confirmed (timestamp, geohash),
+// Pick a photo, anchor it to a user-confirmed (timestamp, geohash),
     // strip metadata, hand the bytes to Storage, build a Reference,
     // announce it on Delivery, queue it for the next on-chain batch.
-    // Returns: {ok, error?, content_hash}.
+    // Returns: {ok, error?, content_hash, storage_cid?}.
     // `timestamp` is a decimal-string of unix seconds. Stringly-typed on
     // purpose: Qt's logosAPI marshalling and the logoscore CLI both
     // hand numeric args off as QString, so accepting qint64 here would
     // silently fail with "method not invokable".
     Q_INVOKABLE virtual QVariantMap submitPhoto(const QString& filePath,
-                                                 const QString& timestamp,
-                                                 const QString& geohash) = 0;
+                                                  const QString& timestamp,
+                                                  const QString& geohash) = 0;
+
+    // Fetch a photo from Logos Storage by CID. Returns the photo as a
+    // data URL (data:image/jpeg;base64,...) that the UI can set as
+    // Image.source without hitting basecamp's sandboxed QNetworkAccessManager.
+    // Returns: {ok, error?, data_url?}.
+    // Internally downloads from storage_module, caches in-process, and
+    // base64-encodes the result so the sandboxed QML engine can render it.
+    Q_INVOKABLE virtual QVariantMap fetchPhoto(const QString& cid) = 0;
 
     // Snapshot of all known references — live (Delivery) + historical
     // (chain scan) — merged and deduplicated by content_hash. The

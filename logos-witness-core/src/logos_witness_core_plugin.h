@@ -10,6 +10,7 @@
 #include "logos_api.h"
 #include "logos_sdk.h"
 #include "../lib/in_memory_store.h"
+#include "../lib/storage_client.h"
 
 class LogosWitnessCorePlugin : public QObject, public LogosWitnessCoreInterface
 {
@@ -33,6 +34,7 @@ public:
     Q_INVOKABLE void subscribeFeed() override;
     Q_INVOKABLE QVariantMap decodeReference(const QByteArray& refBytes) override;
     Q_INVOKABLE QVariantMap decodeGeohash(const QString& geohash) override;
+    Q_INVOKABLE QVariantMap fetchPhoto(const QString& cid) override;
 
     Q_INVOKABLE void initLogos(LogosAPI* logosAPIInstance);
 
@@ -41,8 +43,13 @@ signals:
     void inscriptionsLoaded(const QVariantList& refs);
 
 private:
+    QString cacheDir() const;
+    bool _ensureStorage();
+
     LogosModules* logos = nullptr;
     InMemoryStore store_;
+    StorageClient* storage_ = nullptr;
+    bool storageReady_ = false;
 };
 
 #endif

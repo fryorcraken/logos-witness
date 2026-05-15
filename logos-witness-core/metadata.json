@@ -5,7 +5,7 @@
   "category": "app",
   "description": "Logos Witness core: photo strip + storage + delivery + on-chain reference batching",
   "main": "logos_witness_core_plugin",
-  "dependencies": [],
+  "dependencies": ["storage_module"],
 
   "nix": {
     "packages": {

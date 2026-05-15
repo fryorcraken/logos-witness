@@ -256,18 +256,27 @@ Item {
         onAccepted: root._refreshFromCore()
     }
 
-    // Marker / row detail popup. Stub-only for v0 — Phase 5 swaps in a
-    // real Storage fetch + photo render.
+    // Marker / row detail popup. Phase 5: fetches the photo from Logos
+    // Storage via core.fetchPhoto(cid) and renders it as a base64 data URL
+    // (workaround for basecamp's sandboxed QNetworkAccessManager blocking
+    // file:// URLs). Falls back to metadata-only when storage_cid is empty
+    // (pre-Storage refs) or when the fetch fails.
     Dialog {
         id: detailDialog
         modal: true
         title: "Reference"
         standardButtons: Dialog.Close
         anchors.centerIn: parent
-        width: 380
+        width: 480
+        height: 520
+
+        property string photoDataUrl: ""
+        property bool   photoLoading: false
+        property string photoError: ""
 
         contentItem: ColumnLayout {
             spacing: 8
+
             Label {
                 text: root.selectedRef
                       ? TM.formatTimestamp(root.selectedRef.timestamp)
@@ -290,12 +299,48 @@ Item {
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
             }
+
+            // Photo preview from Storage.
+            Item {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.minimumHeight: 200
+                visible: detailDialog.photoDataUrl !== "" || detailDialog.photoLoading
+
+                Image {
+                    anchors.fill: parent
+                    fillMode: Image.PreserveAspectFit
+                    source: detailDialog.photoDataUrl
+                    visible: detailDialog.photoDataUrl !== ""
+                }
+
+                BusyIndicator {
+                    anchors.centerIn: parent
+                    running: detailDialog.photoLoading
+                    visible: detailDialog.photoLoading
+                }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                color: "#c0392b"
+                font.pixelSize: 11
+                visible: detailDialog.photoError !== ""
+                text: detailDialog.photoError
+            }
+
             Label {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 color: "#888"
                 font.pixelSize: 11
-                text: "Photo preview lands in Phase 5 when stripped bytes flow through Logos Storage."
+                visible: detailDialog.photoDataUrl === ""
+                        && !detailDialog.photoLoading
+                        && detailDialog.photoError === ""
+                text: root.selectedRef && root.selectedRef.storage_cid
+                      ? "Photo unavailable."
+                      : "No photo in storage (pre-Storage reference)."
             }
         }
     }
@@ -345,7 +390,8 @@ Item {
             timelineEntries.append({
                 content_hash: String(e.content_hash),
                 timestamp:    ts,
-                geohash:      String(e.geohash)
+                geohash:      String(e.geohash),
+                storage_cid:  String(e.storage_cid || "")
             })
             var centroid = _decodeGeohashCentroid(e.geohash)
             if (centroid) {
@@ -391,9 +437,38 @@ Item {
         for (var i = 0; i < root.store.entries.length; i++) {
             if (String(root.store.entries[i].content_hash) === String(contentHash)) {
                 root.selectedRef = root.store.entries[i]
+                detailDialog.photoDataUrl = ""
+                detailDialog.photoError = ""
+                detailDialog.photoLoading = false
+
+                // Fetch photo from Storage if we have a CID.
+                var cid = root.store.entries[i].storage_cid
+                if (cid && cid !== "") {
+                    detailDialog.photoLoading = true
+                    _fetchPhoto(cid)
+                }
+
                 detailDialog.open()
                 return
             }
+        }
+    }
+
+    function _fetchPhoto(cid) {
+        try {
+            var raw = logos.callModule(
+                "logos_witness_core", "fetchPhoto", [cid])
+            var parsed = (typeof raw === "string") ? JSON.parse(raw) : raw
+            if (parsed && parsed.ok === true && parsed.data_url) {
+                detailDialog.photoDataUrl = parsed.data_url
+            } else {
+                detailDialog.photoError = parsed && parsed.error
+                    ? parsed.error : "fetchPhoto returned an unexpected result"
+            }
+        } catch (e) {
+            detailDialog.photoError = e.toString()
+        } finally {
+            detailDialog.photoLoading = false
         }
     }
 }
