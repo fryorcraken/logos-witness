@@ -9,52 +9,73 @@ Delivery and durably committed in batches as on-chain inscriptions via
 `zone-sdk`. Other instances of the app render contributions on a shared
 map+timeline.
 
-> **Status:** pre-alpha, Phases 1, 2.1, 2.2, 3.1, 3.2, and 3.3 of
-> [`PLAN.md`](./PLAN.md) complete. Photos-only in v0; video and live
-> capture are deferred. See [`SPEC.md`](./SPEC.md) for the authoritative
-> design.
+> **Status:** v0.0.1 (pre-release), 2026-05-15. Phases 1–6 of
+> [`PLAN.md`](./PLAN.md) complete: stripped photos upload to Logos
+> Storage, references propagate live across instances over Logos
+> Delivery, and the UI shows live + offline status, upload progress,
+> and the resolved CID inline. Phases 7 (on-chain inscribe) and 8
+> (missing-blob UX) outstanding before v0.1.0. Photos-only in v0;
+> video and live capture are deferred. See [`SPEC.md`](./SPEC.md) for
+> the authoritative design.
 
 ## What works today
 
-The core module (`logos_witness_core`) builds, installs into a basecamp
-profile, and round-trips through `logoscore` against an in-memory stub
-store. The UI module (`logos_witness_ui_qml`) loads in basecamp and
-exposes two buttons: "ping core" calls `listInscriptions` via the
-`logos.callModule()` bridge and renders the JSON result; "Submit photo…"
-opens a modal dialog with three tabs — Photo (JPEG picker, filename
-only — see "Vendored Qt imports" below for why there is no preview),
-Location (OSM map; click selects a place, drops a precision-8 geohash
-pin, lat/lon are copy-able), and When (defaults to now, editable to
-backdate). Submit stays disabled until all three inputs are set, then
-calls `submitPhoto(filePath, unixSecondsString, geohash8)` against the
-in-memory stub core via `logos.callModule()`; the dialog closes on
-success. No network photo flow yet: strip pipeline (Phase 4), Storage
-(5), Delivery (6) and `zone-sdk` (7) replace the stubs in turn; the
-post-submit map+timeline of received refs lands in 3.4. The
-`Q_INVOKABLE` interface surface is locked so later phases can swap
-implementations without disturbing callers.
+Submit a stripped JPEG against a geohash-8 pin and a timestamp; the
+core uploads the bytes to Logos Storage, embeds the returned CID in
+the protobuf `Reference`, and broadcasts that `Reference` on the
+single global Delivery topic
+`/logos-witness/1/inscriptions/proto` (waku-derived, runs against
+the public logos.dev fleet). A second instance subscribed to the
+same topic dedupes by `content_hash`, appends the ref to its local
+store, and renders the new marker on the map + a new row on the
+timeline within a few seconds. Clicking a marker fetches the photo
+from Storage and renders it inline (base64 data-url — basecamp's
+sandboxed `QNetworkAccessManager` blocks `file://` Image sources,
+so the bytes have to come through a `data:` URL the core mints).
 
-| Concern                  | Today                                 | After Phase…                |
-| ------------------------ | ------------------------------------- | --------------------------- |
-| EXIF / metadata strip    | strip_jpeg → sha256 of stripped bytes | shipped Phase 4.1–4.3       |
-| Photo storage            | nothing stored, just a hash           | Phase 5 (Logos Storage)     |
-| Cross-instance discovery | none — single process only            | Phase 6 (Delivery pub/sub)  |
-| On-chain inscription     | `flushBatch` is a no-op stub          | Phase 7 (zone-sdk)          |
-| User interface           | submit flow against stub core (photo path + geohash + time → submitPhoto); no inline photo preview | Phase 3.4 (post-submit map + timeline) → 3.5 (scrubber) |
+The UI carries a Live/Offline pill in the timeline header bound to
+the `deliveryReady()` core invokable, an upload status banner with
+spinner / Retry / "saved locally but not broadcast" affordances,
+and a SPEC §11 time cursor (centered playhead, day/week/month/year
+scale) along the bottom edge.
+
+`flushBatch()` is still a stub — Phase 7 wires it to a real
+on-chain inscription via `zone-sdk`. The `Q_INVOKABLE` interface
+surface is locked from Phase 1.3, so Phase 7+8 swap implementations
+without disturbing callers.
+
+| Concern                  | Today                                                                   | Status                       |
+| ------------------------ | ----------------------------------------------------------------------- | ---------------------------- |
+| EXIF / metadata strip    | `strip_jpeg` + exiftool residual gate in CI                             | shipped Phase 4              |
+| Photo storage            | upload to `storage_module` (libstorage), CID embedded in `Reference`    | shipped Phase 5              |
+| Cross-instance discovery | publish + subscribe via `delivery_module` (waku, logos.dev fleet)       | shipped Phase 6              |
+| On-chain inscription     | `flushBatch` is a no-op stub                                            | Phase 7 (zone-sdk) — pending |
+| Missing-blob UX          | error inline; no greyed-marker fallback                                 | Phase 8 — pending            |
+| User interface           | full submit flow + map/timeline with time cursor, CID display, Live/Offline pill, upload banner | shipped Phases 3 + 5 + 6     |
 
 ## Architecture at a glance
 
-Two LGX modules, both built with Nix and installed into `logos-basecamp`:
+Two LGX modules built by this repo, plus two runtime dependencies
+declared in `scaffold.toml` and installed alongside:
 
-| Module                 | Type | Role                                                             |
-| ---------------------- | ---- | ---------------------------------------------------------------- |
-| `logos_witness_core`   | core | EXIF strip, Storage upload, Delivery pub/sub, batch inscriber    |
-| `logos_witness_ui_qml` | UI   | File picker, geohash-on-map selector, submit, map+timeline view (skeleton today, full UI in Phase 3) |
+| Module                 | Type | Provided by | Role                                                                  |
+| ---------------------- | ---- | ----------- | --------------------------------------------------------------------- |
+| `logos_witness_core`   | core | this repo   | EXIF strip, Storage upload, Delivery pub/sub, batch inscriber (stub)  |
+| `logos_witness_ui_qml` | UI   | this repo   | File picker, geohash-on-map selector, submit, map + timeline view     |
+| `storage_module`       | core | upstream    | Logos Storage wrapper (libstorage / Nim runtime, CID-addressed blobs) |
+| `delivery_module`      | core | upstream    | Logos Delivery wrapper (waku-derived publish/subscribe + JSON config) |
 
-The single global Delivery topic will be `/logos-witness/1/inscriptions/proto`.
+The single global Delivery topic is `/logos-witness/1/inscriptions/proto`.
 Each on-chain reference is a protobuf `Reference` message —
-`{schema_version, content_hash, timestamp, geohash}` — with a
-precision-8 geohash. See `logos-witness-core/proto/reference.proto`.
+`{schema_version, content_hash, timestamp, geohash, storage_cid}` —
+with a precision-8 geohash. See `logos-witness-core/proto/reference.proto`.
+
+`logos_witness_core` declares `storage_module` and `delivery_module`
+in its `metadata.json` `dependencies` array; `logos-module-builder`
+emits typed `m_logos->storage_module.*` and
+`m_logos->delivery_module.*` accessors against those deps' generated
+SDK headers. There is no `loadPlugin` dance — the framework binds the
+typed clients on first use.
 
 ## Prerequisites
 
@@ -64,9 +85,42 @@ precision-8 geohash. See `logos-witness-core/proto/reference.proto`.
 - The `lgs` scaffold CLI ([`logos-co/logos-scaffold`](https://github.com/logos-co/logos-scaffold))
 - Git
 
-## Quickstart
+## Install from a tagged release (Linux x86_64)
 
-Two ways to run today: the **CLI flow** (`logoscore`, easy, no GUI) and the
+Each tagged release attaches portable `.lgx` bundles for both witness
+modules plus a combined tarball. Pull them from the [Releases page](https://github.com/fryorcraken/logos-witness/releases)
+and drop them into your basecamp profile's `modules/` and
+`plugins/` directories (or feed them to `lgpm install`):
+
+```bash
+# Pick the latest release tag.
+TAG=v0.0.1
+PROFILE=$HOME/.cache/your-basecamp-profile/xdg-data/Logos/LogosBasecampDev
+
+gh release download "$TAG" -R fryorcraken/logos-witness \
+  --pattern '*.lgx' --pattern 'SHA256SUMS'
+
+# Verify checksums before installing — SPEC §9 considers a release
+# without matching SHA256SUMS broken; the workflow refuses to publish
+# one, but always verify on your side anyway.
+sha256sum --check SHA256SUMS
+
+lgpm --modules-dir "$PROFILE/modules" \
+     --ui-plugins-dir "$PROFILE/plugins" \
+     install --file logos_witness_core-${TAG#v}-linux-x86_64.lgx
+lgpm --modules-dir "$PROFILE/modules" \
+     --ui-plugins-dir "$PROFILE/plugins" \
+     install --file logos_witness_ui_qml-${TAG#v}-linux-x86_64.lgx
+```
+
+The witness modules need `storage_module` and `delivery_module` to
+also be installed — pin them to the same revs the release was built
+against (recorded in the tarball's `manifest.txt`). The scaffold
+flow below installs all four automatically.
+
+## Quickstart from source
+
+Two ways to run: the **CLI flow** (`logoscore`, easy, no GUI) and the
 **UI flow** (basecamp window, requires an env wedge — see "Launching the UI"
 below for why).
 
@@ -77,7 +131,8 @@ cd logos-witness
 # 1. Resolve and build basecamp + lgpm + alice/bob profiles.
 lgs basecamp setup
 
-# 2. Build + install both modules into the alice/bob profiles.
+# 2. Build + install all four modules (core + UI + storage + delivery)
+#    into both alice and bob profiles.
 lgs basecamp install
 ```
 
@@ -93,20 +148,28 @@ nix build 'github:logos-co/logos-logoscore-cli/tutorial-v1' --out-link /tmp/logo
 /tmp/logoscore/bin/logoscore -D -m "$ALICE/modules"
 /tmp/logoscore/bin/logoscore load-module logos_witness_core
 
-# 3. Submit a photo (stub: no strip, no Storage; just hash + in-memory store).
-echo "demo photo" > /tmp/demo.jpg
-/tmp/logoscore/bin/logoscore call logos_witness_core submitPhoto /tmp/demo.jpg 1714867200 u4pruydq
-# → {"result":{"content_hash":"e0...","ok":true},"status":"ok"}
+# 3. Submit a real JPEG. The core strips metadata, sha256s the stripped
+#    bytes, uploads them to storage_module, embeds the returned CID,
+#    and publishes the protobuf Reference on the Delivery topic.
+/tmp/logoscore/bin/logoscore call logos_witness_core submitPhoto /path/to/photo.jpg 1714867200 u4pruydq
+# → {"result":{"ok":true,"content_hash":"e0...","storage_cid":"zDv...HrkJV2","delivery_ok":true},"status":"ok"}
 
-# 4. List references back.
+# 4. List references back. Local submits + anything that's arrived
+#    from peers via Delivery, deduped by content_hash.
 /tmp/logoscore/bin/logoscore call logos_witness_core listInscriptions
-# → {"result":[{"content_hash":"e0...","geohash":"u4pruydq","schema_version":1,"timestamp":1714867200}],"status":"ok"}
+# → {"result":[{"ok":true,"content_hash":"e0...","geohash":"u4pruydq","schema_version":1,"timestamp":1714867200,"storage_cid":"zDv...HrkJV2"}],"status":"ok"}
 
-# 5. Manual batch flush is a no-op stub today (zone-sdk inscribe lands in Phase 7).
+# 5. Fetch the photo bytes back from Storage (returned as a data: URL
+#    so the UI can render without `file://` access; CLI users just see
+#    the base64 prefix).
+/tmp/logoscore/bin/logoscore call logos_witness_core fetchPhoto zDv...HrkJV2
+# → {"result":{"ok":true,"data_url":"data:image/jpeg;base64,/9j/4AAQ..."},"status":"ok"}
+
+# 6. Manual batch flush is a no-op stub today (zone-sdk inscribe lands in Phase 7).
 /tmp/logoscore/bin/logoscore call logos_witness_core flushBatch
 # → {"result":{"flushed":0,"note":"stub: zone-sdk inscribe wired in Phase 7","ok":true},"status":"ok"}
 
-# 6. Stop the daemon when finished.
+# 7. Stop the daemon when finished.
 /tmp/logoscore/bin/logoscore stop
 ```
 
@@ -126,6 +189,19 @@ the env we need. A helper script lives at [`scripts/launch-witness.sh`](./script
 ```bash
 ./scripts/launch-witness.sh alice
 ```
+
+To dogfood the live cross-instance feed, launch a second profile in
+another terminal. Pass `LOGOS_DELIVERY_PORTS_SHIFT` so the
+`delivery_module` instances don't collide on local ports:
+
+```bash
+LOGOS_DELIVERY_PORTS_SHIFT=200 ./scripts/launch-witness.sh bob
+```
+
+Submit a photo in alice; within a few seconds the same reference
+appears on bob's map + timeline. Both connect to the public
+logos.dev waku fleet, so the demo doesn't need any local
+bootstrap configuration.
 
 Pre-alpha caveat: the script reaches into the scaffold cache and reproduces
 the wrapper's env inline. It will keep working as long as the basecamp pin
@@ -155,13 +231,14 @@ cp -r "$QTPOS/lib/qt-6/qml/QtPositioning" logos-witness-ui-qml/qml/QtPositioning
 chmod -R u+w logos-witness-ui-qml/qml/QtLocation logos-witness-ui-qml/qml/QtPositioning
 ```
 
-No inline photo preview: basecamp installs a DenyAll `QNetworkAccessManager`
-on every UI plugin's QML engine, so `Image.source = file://<path>` is
-rejected for any local file path. The Photo tab shows the filename only;
-the core module (which has unrestricted filesystem access) reads the bytes
-on submit. Inline preview returns when basecamp exposes a sanctioned local
-image-provider API, or when we move photos through Logos Storage first
-(Phase 5).
+No inline photo preview *in the Submit dialog*: basecamp installs a
+DenyAll `QNetworkAccessManager` on every UI plugin's QML engine, so
+`Image.source = file://<path>` is rejected for any local file path.
+The Photo tab shows the filename only; the core module (which has
+unrestricted filesystem access) reads the bytes on submit. **After
+upload**, clicking a marker fetches the photo from Storage via
+`fetchPhoto(cid)` and the core returns it as a base64 `data:` URL
+the QML engine *will* accept — that's the inline preview path.
 
 ## Inspect a built module
 
@@ -176,11 +253,16 @@ nix build '.#lib' --out-link result-lib
 ## Tests
 
 ```bash
-# Protobuf reference codec round-trip (Phase 1.2).
+# Core unit tests: protobuf reference codec (Phase 1.2), geohash
+# decoder (Phase 3.4), strip pipeline (Phase 4.1) + exiftool
+# residual-metadata gate (Phase 4.2). storage_client and
+# delivery_client are not unit-tested — they require a live
+# storage_module / delivery_module node, so the gate is the
+# two-instance dogfood + CI's build-portable smoke.
 cd logos-witness-core
 nix develop --command bash -c '
   cmake -B build -GNinja \
-    && cmake --build build --target test_reference_codec \
+    && cmake --build build --target test_reference_codec test_geohash test_exif_strip \
     && ctest --test-dir build --output-on-failure'
 
 # UI helper unit tests — timestamp formatting, submit-args marshalling
@@ -248,29 +330,35 @@ the same commit.
 logos-witness/
 ├── README.md                  # this file
 ├── SPEC.md                    # authoritative design & boundaries
-├── PLAN.md                    # phase-ordered task breakdown
+├── PLAN.md                    # phase-ordered task breakdown + status
+├── CHANGELOG.md               # release notes (Keep-a-Changelog)
 ├── LICENSE-MIT
 ├── LICENSE-APACHE
-├── scaffold.toml              # basecamp pin + module registry
+├── scaffold.toml              # basecamp pin + module registry (project + 2 deps)
 ├── scripts/
 │   └── launch-witness.sh      # env-wedge launcher (see "UI flow")
+├── .github/workflows/
+│   ├── ci.yml                 # PR + main canary: build, ctest, qmltest, docs gate
+│   └── release.yml            # `v*.*.*` tag → portable .lgx bundles to a Release
 ├── logos-witness-core/        # core LGX module (C++17 / Qt 6)
 │   ├── CMakeLists.txt
 │   ├── flake.nix              # pinned to logos-module-builder commit 5e196e2769
-│   ├── metadata.json
+│   ├── metadata.json          # declares storage_module + delivery_module deps
 │   ├── proto/reference.proto  # wire / on-chain schema
 │   ├── src/                   # interface + plugin + initLogos
-│   ├── lib/                   # InMemoryStore (stub backend, Phase 1)
-│   └── tests/                 # protobuf round-trip
+│   ├── lib/                   # InMemoryStore, exif_strip, storage_client, delivery_client
+│   └── tests/                 # protobuf round-trip, geohash, strip pipeline + exiftool gate
 └── logos-witness-ui-qml/      # UI LGX module (QML)
     ├── flake.nix              # pinned to logos-module-builder commit 5e196e2769
     ├── metadata.json          # view = qml/Main.qml, icon = icon.png
     ├── icon.svg               # sidebar icon (source)
     ├── icon.png               # sidebar icon (128×128, shipped in the .lgx)
     ├── qml/                   # bundled as the view directory
-    │   ├── Main.qml           # ping-core + open-submit-dialog buttons
-    │   ├── SubmitDialog.qml   # photo (3.1) + map (3.2) + when + submit (3.3)
-    │   ├── MapView.qml        # OSM map, click → geohash-8 pin
+    │   ├── Main.qml           # map + timeline + cursor + upload banner + Live pill
+    │   ├── SubmitDialog.qml   # photo + map + when + submit
+    │   ├── MapView.qml        # OSM map, click → geohash-8 pin / display markers
+    │   ├── TimeCursor.qml     # SPEC §11 centered-playhead time cursor
+    │   ├── TimelineModel.js   # store + window + opacity helpers (unit-tested)
     │   ├── SubmitHelpers.js   # unit-tested arg/timestamp helpers
     │   ├── QtLocation/        # vendored Qt 6.9.2 QML import (see README)
     │   └── QtPositioning/     # vendored Qt 6.9.2 QML import (see README)
