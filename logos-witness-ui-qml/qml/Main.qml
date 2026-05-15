@@ -50,6 +50,17 @@ Item {
     // Detail popup state. Set when the user clicks a marker or row.
     property var selectedRef: null
 
+    // Upload status — drives the banner above the timeline list.
+    // `uploadState` is "" (idle) | "uploading" | "error". `pendingUpload`
+    // is the {filePath, timestamp, geohash} payload kept around for two
+    // purposes: (a) handed to `_runPendingUpload` after the dispatcher
+    // timer fires; (b) retained on failure so the user can hit Retry
+    // from the banner instead of re-picking the photo + pin + timestamp.
+    // Cleared on successful upload or on explicit dismiss (✕).
+    property string uploadState: ""
+    property string uploadError: ""
+    property var    pendingUpload: null
+
     // Stub-only: a single-instance refresh window. Polling cadence is
     // intentionally lazy — every 5 s — because in v0 the only producer
     // of new refs is local submitPhoto, and we already trigger a refresh
@@ -63,6 +74,24 @@ Item {
         repeat: true
         running: true
         onTriggered: root._refreshFromCore()
+    }
+
+    // One-shot dispatcher for the blocking submitPhoto call. SubmitDialog
+    // emits uploadRequested → we stash the payload + flip uploadState to
+    // "uploading" + start this timer with a tiny delay; when it fires the
+    // dialog has already closed and the banner has painted, so the
+    // QML-thread block during the synchronous logos.callModule is visible
+    // to the user as "uploading…" rather than an unexplained freeze. 40 ms
+    // is empirical: `Qt.callLater` and a 0-interval Timer both fire before
+    // the dialog-close paint flushes under basecamp's Qt6 build, so the
+    // banner doesn't render until *after* the block ends — defeating the
+    // entire point. 40 ms is the smallest delay that reliably yields a
+    // paint cycle here.
+    Timer {
+        id: uploadDispatcher
+        interval: 40
+        repeat: false
+        onTriggered: root._runPendingUpload()
     }
 
     Component.onCompleted: root._refreshFromCore()
@@ -104,6 +133,63 @@ Item {
         ColumnLayout {
             anchors.fill: parent
             spacing: 8
+
+            // Upload status banner — visible only while submitPhoto is
+            // in flight or during the brief error-display window after a
+            // failure. Sits above the list so it can't be scrolled off.
+            Rectangle {
+                Layout.fillWidth: true
+                visible: root.uploadState !== ""
+                color: root.uploadState === "error" ? "#fdecea" : "#eaf3fd"
+                border.color: root.uploadState === "error" ? "#c0392b" : "#3498db"
+                border.width: 1
+                radius: 4
+                implicitHeight: bannerRow.implicitHeight + 12
+                RowLayout {
+                    id: bannerRow
+                    anchors.fill: parent
+                    anchors.margins: 6
+                    spacing: 8
+                    BusyIndicator {
+                        running: root.uploadState === "uploading"
+                        visible: root.uploadState === "uploading"
+                        Layout.preferredWidth: 18
+                        Layout.preferredHeight: 18
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 11
+                        color: root.uploadState === "error" ? "#c0392b" : "#1d4f7d"
+                        text: root.uploadState === "uploading"
+                              ? "Uploading photo to Logos Storage…"
+                              : ("Upload failed: " + root.uploadError)
+                    }
+                    Button {
+                        visible: root.uploadState === "error"
+                                 && root.pendingUpload !== null
+                        text: "Retry"
+                        Layout.preferredHeight: 24
+                        onClicked: {
+                            root.uploadState = "uploading"
+                            root.uploadError = ""
+                            uploadDispatcher.start()
+                        }
+                    }
+                    Button {
+                        visible: root.uploadState === "error"
+                        text: "✕"
+                        flat: true
+                        Layout.preferredWidth: 24
+                        Layout.preferredHeight: 24
+                        onClicked: {
+                            root.pendingUpload = null
+                            root.uploadState = ""
+                            root.uploadError = ""
+                        }
+                    }
+                }
+            }
 
             RowLayout {
                 Layout.fillWidth: true
@@ -171,6 +257,13 @@ Item {
                             font.family: "monospace"
                             font.pixelSize: 10
                             color: "#555"
+                        }
+                        Label {
+                            visible: model.storage_cid && model.storage_cid !== ""
+                            text: "cid " + TM.shortCid(model.storage_cid)
+                            font.family: "monospace"
+                            font.pixelSize: 10
+                            color: "#777"
                         }
                     }
                     onClicked: root._showDetailFor(model.content_hash)
@@ -253,7 +346,16 @@ Item {
     SubmitDialog {
         id: submitDialog
         anchors.centerIn: parent
-        onAccepted: root._refreshFromCore()
+        onUploadRequested: function (filePath, timestamp, geohash) {
+            root.uploadState   = "uploading"
+            root.uploadError   = ""
+            root.pendingUpload = {
+                filePath:  filePath,
+                timestamp: timestamp,
+                geohash:   geohash
+            }
+            uploadDispatcher.start()
+        }
     }
 
     // Marker / row detail popup. Phase 5: fetches the photo from Logos
@@ -293,6 +395,16 @@ Item {
             Label {
                 text: root.selectedRef
                       ? ("content_hash:\n" + root.selectedRef.content_hash)
+                      : ""
+                font.family: "monospace"
+                font.pixelSize: 10
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+            Label {
+                visible: root.selectedRef && root.selectedRef.storage_cid
+                text: root.selectedRef && root.selectedRef.storage_cid
+                      ? ("storage_cid:\n" + root.selectedRef.storage_cid)
                       : ""
                 font.family: "monospace"
                 font.pixelSize: 10
@@ -348,6 +460,40 @@ Item {
     // ---------------------------------------------------------------
     // Core wiring
     // ---------------------------------------------------------------
+
+    // Runs the synchronous submitPhoto call deferred from
+    // SubmitDialog.uploadRequested. Resolves to either uploadState === ""
+    // (success — banner clears, timeline refreshes and now shows the new
+    // entry with its CID) or "error" (banner stays until the user clicks
+    // the Retry button, the ✕ dismiss button, or submits a fresh photo).
+    // On failure `pendingUpload` is retained so Retry can re-fire without
+    // making the user re-pick file + pin + timestamp.
+    function _runPendingUpload() {
+        var p = root.pendingUpload
+        if (!p) { root.uploadState = ""; return }
+        try {
+            var result = logos.callModule(
+                "logos_witness_core", "submitPhoto",
+                [p.filePath, p.timestamp, p.geohash])
+            var parsed = null
+            try { parsed = (typeof result === "string")
+                           ? JSON.parse(result) : result } catch (_) {}
+            if (!parsed || parsed.ok !== true) {
+                root.uploadError = parsed && parsed.error
+                    ? String(parsed.error)
+                    : ("Submit failed. Core returned: " + JSON.stringify(result))
+                root.uploadState = "error"
+                return
+            }
+            root.pendingUpload = null
+            root.uploadState = ""
+            root.uploadError = ""
+            root._refreshFromCore()
+        } catch (e) {
+            root.uploadError = e.toString()
+            root.uploadState = "error"
+        }
+    }
 
     // Pull the full list from the core and merge it into the local
     // store. Cheap in v0 (stub keeps everything in process memory); when

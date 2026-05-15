@@ -67,11 +67,69 @@ QJsonArray()", "submitPhoto: storage not ready, storing without CID").
 per-profile env, so `scripts/launch-witness.sh` can retire. Unrelated
 to this storage fix; tracked separately.
 
-**Resume here:** end-to-end dogfood (single instance) — submit a photo
-in alice via `./scripts/launch-witness.sh alice`, confirm the
-basecamp log now shows `StorageClient: started; peerId=12D3…` and
-`submitPhoto: cid stored locally: bafy…`. If green, move to Phase 6
-(Delivery publish + subscribe for live cross-instance feed).
+**Phase 5.2 dogfood verified (2026-05-15, single-instance alice):**
+Submitted a 95 KB JPEG; storage_module log showed `Stored data
+manifestCid=zDv*HrkJV2 treeCid=zDz*CWvTXJ blocks=2`. Two follow-on
+fixes landed in the same dogfood pass:
+
+- `buildStorageConfig` was passing `listen-addrs: [/ip4/.../tcp/0]` —
+  what the `storage_module_interface.h` docstring (line 23)
+  documents. libstorage rejected it with `Unexpected field
+  'listen-addrs' while deserializing StorageConf*`. The actual
+  schema (`logos-storage-nim/storage/conf.nim`) uses scalar
+  `listen-ip` + `listen-port`. Fixed inline; comment in
+  `logos_witness_core_plugin.cpp` flags the upstream docstring as
+  misleading.
+- UI got an upload-status banner above the Timeline column
+  (Uploading / Failed) and CID display on every row + in the
+  Reference detail dialog. The blocking `submitPhoto` call is
+  deferred through a 40 ms `uploadDispatcher` Timer so the banner
+  paints before the QML thread blocks (`Qt.callLater` and 0-interval
+  Timer both fire before the dialog-close paint flushes under
+  basecamp's Qt6 build — verified empirically). Failure path
+  retains `pendingUpload` so the banner shows a Retry button — the
+  user doesn't lose photo + pin + timestamp on a transient storage
+  error.
+- SubmitDialog date/time TextField auto-zero bug fixed: the
+  `text: Qt.formatDate(capturedAt, ...)` binding was reactively
+  rewriting the field every keystroke because `onTextChanged` →
+  `_revalidateDateTime` → `capturedAt = …` → binding refire → text
+  reformatted to `01` mid-typing → next keystroke produced `012`.
+  Fields now seed once via `_seedDateTimeFields(d)` on dialog open
+  + reset only.
+
+**Resume here:** Phase 6 (Delivery publish + subscribe for live
+cross-instance feed). Two-instance round-trip (alice → bob via
+Storage discv5) is still untested — storage_module is bootstrapping
+itself off UPnP but `scaffold.toml` doesn't yet declare a
+`bootstrap-node` SPR for cross-instance peer discovery (see follow-
+ups below).
+
+**Code review of this commit (UI + listen-ip fix):** Done 2026-05-15
+via `agent-skills:code-reviewer`. Verdict: APPROVE WITH MINOR
+CHANGES, 0 Critical, 2 Important, 7 Suggestions. Actioned both
+Importants and 4 of the 7 Suggestions in the same commit. Deferred
+(captured below):
+- **`SubmitDialog.qml`** still carries `submitting` and `lastError`
+  properties (lines 43-44) that are no longer mutated — Main.qml
+  owns the failure path now. `&& !submitting` in `_canSubmit` is
+  dead. Clean up in next UI touch.
+- **Theme palette extraction**: banner + frame colours are hex
+  literals (`#fdecea`, `#eaf3fd`, `#1d4f7d`, `#c0392b`, `#fafafa`,
+  `#ccc`, `#888`, …) scattered across `Main.qml`, `MapView.qml`,
+  `SubmitDialog.qml`. A `Theme.qml` singleton or a `Theme` JS
+  object next to `TimelineModel.js` would centralise these. Worth
+  doing before Phase 6 adds Delivery-status colours too.
+- **Storage `bootstrap-node` gap**: `buildStorageConfig` doesn't
+  set `bootstrap-node`, so each instance discovers peers only via
+  UPnP + local discv5. Single-instance dogfood works; two-instance
+  pairing needs the peer SPR wired through. Block on a SPEC §2.1
+  amendment + a `scaffold.toml` per-profile mechanism (overlaps
+  with logos-co/scaffold#163).
+- **Upstream docstring fix**: open a one-line PR on
+  `logos-co/logos-storage-module` to correct the `listen-addrs`
+  example in `storage_module_interface.h:23` so the next consumer
+  doesn't hit the same trap.
 
 Pending non-blocking from Phase 4: README quickstart + screenshots
 checkbox for the Phase 3 checkpoint is still empty. Carry into

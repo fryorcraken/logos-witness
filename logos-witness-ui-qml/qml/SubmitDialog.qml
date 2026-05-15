@@ -43,6 +43,12 @@ Dialog {
     property string lastError: ""
     property bool   submitting: false
 
+    // Emitted just before the dialog closes on Submit. Main.qml owns the
+    // actual blocking submitPhoto call so it can render an "uploading"
+    // banner while the call is in flight (the call holds the QML thread
+    // up to 60s waiting on storageUploadDone).
+    signal uploadRequested(string filePath, string timestamp, string geohash)
+
     readonly property bool _canSubmit:
         selectedFile != "" && pinGeohash !== "" && capturedAt !== null
         && dateTimeError === "" && !submitting
@@ -168,11 +174,18 @@ Dialog {
                     // open default while the user thought they'd overridden
                     // it. Silent fallback is now impossible — Submit is
                     // gated by `dateTimeError === ""`.
+                    // The TextField `text` is NOT bound to capturedAt —
+                    // _revalidateDateTime writes capturedAt back, which
+                    // would loop through the binding and re-format the
+                    // field mid-edit (e.g. typing "1" for the day → field
+                    // becomes "01" → next keystroke "2" appends to →
+                    // "012"). Initial value is seeded on dialog open via
+                    // onAboutToShow / _resetState; thereafter the field
+                    // is whatever the user typed.
                     Label { text: "Date (YYYY-MM-DD):" }
                     TextField {
                         id: dateField
                         Layout.preferredWidth: 140
-                        text: Qt.formatDate(submitDialog.capturedAt, "yyyy-MM-dd")
                         onTextChanged: submitDialog._revalidateDateTime()
                     }
 
@@ -180,10 +193,6 @@ Dialog {
                     TextField {
                         id: timeField
                         Layout.preferredWidth: 110
-                        text: Qt.formatTime(
-                            new Date(submitDialog.capturedAt.getTime()
-                                     + submitDialog.capturedAt.getTimezoneOffset() * 60000),
-                            "HH:mm:ss")
                         onTextChanged: submitDialog._revalidateDateTime()
                     }
                 }
@@ -258,37 +267,24 @@ Dialog {
 
     function _submit() {
         lastError = ""
-        submitting = true
-        try {
-            var path  = SH.filePathFromUrl(selectedFile)
-            var stamp = SH.unixSecondsString(capturedAt)
-            var result = logos.callModule(
-                "logos_witness_core", "submitPhoto",
-                [path, stamp, pinGeohash])
-            // basecamp's logos.callModule bridge returns the core's
-            // QVariantMap as a JSON-encoded string, not a parsed object.
-            // Parse it before inspecting `ok`; if parsing fails treat the
-            // whole call as a failure with the raw payload in the error.
-            var parsed = null
-            try { parsed = (typeof result === "string")
-                           ? JSON.parse(result) : result } catch (_) {}
-            if (!parsed || parsed.ok !== true) {
-                lastError = "Submit failed. Core returned: " + JSON.stringify(result)
-                submitting = false
-                return
-            }
-            accept()  // closes the dialog with Accepted result
-        } catch (e) {
-            lastError = e.toString()
-            submitting = false
-        }
+        var path  = SH.filePathFromUrl(selectedFile)
+        var stamp = SH.unixSecondsString(capturedAt)
+        // Hand off to Main.qml — it owns the banner state and the
+        // blocking submitPhoto call (so the dialog-close paint can flush
+        // before the QML thread blocks for the upload).
+        uploadRequested(path, stamp, pinGeohash)
+        accept()
     }
 
     // capturedAt default needs to be "the moment the dialog opened", not
     // component-construction time — this Dialog is instantiated once in
     // Main.qml and reused, so without this hook a user who sat on an open
     // dialog for ten minutes would silently submit the app-launch time.
-    onAboutToShow: capturedAt = new Date()
+    onAboutToShow: {
+        var now = new Date()
+        capturedAt = now
+        _seedDateTimeFields(now)
+    }
 
     onAccepted: _resetState()
     onRejected: _resetState()
@@ -296,9 +292,23 @@ Dialog {
         selectedFile = ""
         pinGeohash = ""
         hasPin = false
-        capturedAt = new Date()
+        var now = new Date()
+        capturedAt = now
         lastError = ""
         dateTimeError = ""
         submitting = false
+        _seedDateTimeFields(now)
+    }
+
+    // One-shot seed of the date/time fields. Called on dialog open and
+    // reset — never reactively, so user typing isn't overwritten mid-
+    // edit. Takes the date as an explicit argument so the caller doesn't
+    // race the (asynchronous) capturedAt property update; an EXIF auto-
+    // fill path in v1 should also call this directly after writing
+    // capturedAt to keep the fields in sync.
+    function _seedDateTimeFields(d) {
+        dateField.text = Qt.formatDate(d, "yyyy-MM-dd")
+        var local = new Date(d.getTime() + d.getTimezoneOffset() * 60000)
+        timeField.text = Qt.formatTime(local, "HH:mm:ss")
     }
 }

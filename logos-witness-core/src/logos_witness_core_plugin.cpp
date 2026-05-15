@@ -41,7 +41,12 @@ QString buildStorageConfig(const QString& dataDir) {
     QJsonObject cfg;
     cfg["log-level"] = QString("INFO");
     cfg["data-dir"] = dataDir;
-    cfg["listen-addrs"] = QJsonArray{"/ip4/0.0.0.0/tcp/0"};
+    // libstorage's StorageConf uses scalar listen-ip + listen-port (not
+    // a multiaddr `listen-addrs` array). The
+    // storage_module_interface.h docstring is misleading on this — see
+    // logos-storage-nim/storage/conf.nim for the authoritative names.
+    cfg["listen-ip"] = QString("0.0.0.0");
+    cfg["listen-port"] = 0;  // random free port
     cfg["nat"] = QString("any");
 
     int apiPort = qEnvironmentVariableIntValue("LOGOS_STORAGE_API_PORT");

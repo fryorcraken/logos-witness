@@ -101,6 +101,15 @@ function shortHash(hashHex) {
     return String(hashHex).slice(0, 8);
 }
 
+// First 8 + last 4 of a CID, joined with an ellipsis. CIDs are long
+// (base32/58 of a multihash) so a head+tail makes them eyeballable
+// distinct without wrapping.
+function shortCid(cid) {
+    var s = String(cid || "");
+    if (s.length <= 14) return s;
+    return s.slice(0, 8) + "…" + s.slice(-4);
+}
+
 // Min/max timestamp across the store, in unix seconds. Returns null when
 // the store is empty so callers can hide the scrubber rather than render
 // a degenerate range. Phase 3.5: drives the RangeSlider bounds.
