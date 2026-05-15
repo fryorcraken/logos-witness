@@ -50,6 +50,12 @@ Item {
     // Detail popup state. Set when the user clicks a marker or row.
     property var selectedRef: null
 
+    // Live/Offline indicator for the Delivery feed. Refreshed every
+    // `refreshTimer` tick (5s) plus on init via _probeDelivery. The core
+    // exposes deliveryReady() as a sync invokable so the UI doesn't have
+    // to track the lifecycle itself.
+    property bool deliveryReady: false
+
     // Upload status — drives the banner above the timeline list.
     // `uploadState` is "" (idle) | "uploading" | "error". `pendingUpload`
     // is the {filePath, timestamp, geohash} payload kept around for two
@@ -73,7 +79,7 @@ Item {
         interval: 5000
         repeat: true
         running: true
-        onTriggered: root._refreshFromCore()
+        onTriggered: { root._refreshFromCore(); root._probeDelivery() }
     }
 
     // One-shot dispatcher for the blocking submitPhoto call. SubmitDialog
@@ -94,7 +100,16 @@ Item {
         onTriggered: root._runPendingUpload()
     }
 
-    Component.onCompleted: root._refreshFromCore()
+    Component.onCompleted: {
+        // Warm the Delivery subscriber so peer broadcasts are caught
+        // from this instance's first moment. Idempotent on the core side
+        // (see subscribeFeed); failure flips the Live/Offline badge via
+        // _probeDelivery so the user can see the degraded state.
+        try { logos.callModule("logos_witness_core", "subscribeFeed", []) }
+        catch (e) { console.warn("subscribeFeed failed:", e) }
+        root._refreshFromCore()
+        root._probeDelivery()
+    }
 
     // ---------------------------------------------------------------
     // Layout
@@ -197,6 +212,25 @@ Item {
                     text: "Timeline"
                     font.bold: true
                     Layout.fillWidth: true
+                }
+                // Live/Offline pill. Live = delivery_module subscribed
+                // and reachable; Offline = init/subscribe failed (peer
+                // broadcasts won't land here). Bound to root.deliveryReady,
+                // which _probeDelivery() refreshes every 5s.
+                Rectangle {
+                    Layout.preferredHeight: 16
+                    implicitWidth: deliveryPill.implicitWidth + 12
+                    radius: 8
+                    color: root.deliveryReady ? "#e7f7ec" : "#fbeaea"
+                    border.color: root.deliveryReady ? "#2ecc71" : "#c0392b"
+                    border.width: 1
+                    Label {
+                        id: deliveryPill
+                        anchors.centerIn: parent
+                        text: root.deliveryReady ? "● Live" : "● Offline"
+                        font.pixelSize: 10
+                        color: root.deliveryReady ? "#1e7a3c" : "#a13226"
+                    }
                 }
                 Label {
                     // "5 refs" when the cursor's window holds them all,
@@ -486,9 +520,23 @@ Item {
                 return
             }
             root.pendingUpload = null
-            root.uploadState = ""
-            root.uploadError = ""
+            // SPEC §7 / no-silent-fallbacks: a successful upload that
+            // didn't broadcast is reported as a soft warning. The ref
+            // is durable locally; just no peers will see it until the
+            // next time this instance has Delivery connectivity and
+            // republishes. Treat as a self-clearing banner so the user
+            // notices but isn't blocked.
+            if (parsed.delivery_ok === false) {
+                root.uploadError = "Saved locally — not broadcast: "
+                    + (parsed.delivery_error
+                       ? String(parsed.delivery_error) : "delivery offline")
+                root.uploadState = "error"
+            } else {
+                root.uploadState = ""
+                root.uploadError = ""
+            }
             root._refreshFromCore()
+            root._probeDelivery()
         } catch (e) {
             root.uploadError = e.toString()
             root.uploadState = "error"
@@ -499,6 +547,21 @@ Item {
     // store. Cheap in v0 (stub keeps everything in process memory); when
     // Storage + Delivery are real this stays correct because dedupe-by-
     // content_hash keeps re-seeding idempotent.
+    // Poll the core's deliveryReady() invokable and update the badge.
+    // Cheap: sync invokable, just reads a bool. Called once on init
+    // and on every refreshTimer tick so the badge tracks reconnects.
+    function _probeDelivery() {
+        try {
+            var v = logos.callModule(
+                "logos_witness_core", "deliveryReady", [])
+            // Bridge may JSON-encode the bool as the string "true"/"false".
+            var parsed = (typeof v === "string") ? JSON.parse(v) : v
+            root.deliveryReady = (parsed === true)
+        } catch (e) {
+            root.deliveryReady = false
+        }
+    }
+
     function _refreshFromCore() {
         try {
             var raw = logos.callModule(

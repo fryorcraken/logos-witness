@@ -8,6 +8,9 @@
     # the dep's include/ into our generated_code/ so we can call
     # m_logos->storage_module.uploadUrl(...) with a typed accessor.
     storage_module.url = "github:logos-co/logos-storage-module";
+    # delivery_module: same wiring as storage_module, used for the
+    # live cross-instance feed on /logos-witness/1/inscriptions/proto.
+    delivery_module.url = "github:logos-co/logos-delivery-module";
   };
 
   outputs = inputs@{ logos-module-builder, ... }:

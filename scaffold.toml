@@ -49,6 +49,14 @@ role = "project"
 flake = "github:logos-co/logos-storage-module#lgx"
 role = "dependency"
 
+# delivery_module — upstream Qt6/lgx wrapper around liblogosdelivery
+# (Logos Messaging / waku-derived). Required by Phase 6 (SPEC §2:
+# `/logos-witness/1/inscriptions/proto`). Same install shape as
+# storage_module; bundle includes liblogosdelivery + libpq.
+[modules.delivery_module]
+flake = "github:logos-co/logos-delivery-module#lgx"
+role = "dependency"
+
 [wallet]
 home_dir = ".scaffold/wallet"
 

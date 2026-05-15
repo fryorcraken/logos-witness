@@ -98,34 +98,116 @@ fixes landed in the same dogfood pass:
   Fields now seed once via `_seedDateTimeFields(d)` on dialog open
   + reset only.
 
-**Resume here:** Phase 6 (Delivery publish + subscribe for live
-cross-instance feed). Two-instance round-trip (alice → bob via
-Storage discv5) is still untested — storage_module is bootstrapping
-itself off UPnP but `scaffold.toml` doesn't yet declare a
-`bootstrap-node` SPR for cross-instance peer discovery (see follow-
-ups below).
+**Phase 6 (Delivery) DONE — verified two-instance dogfood 2026-05-15:**
+alice + bob both connect to the public logos.dev waku fleet (status.im
+delivery-01/02 servers in Amsterdam + Hong Kong), subscribe to
+`/logos-witness/1/inscriptions/proto`, and round-trip references via
+the upstream `delivery_module` (waku-derived). Submitted photo on
+alice appears on bob's timeline within seconds.
 
-**Code review of this commit (UI + listen-ip fix):** Done 2026-05-15
-via `agent-skills:code-reviewer`. Verdict: APPROVE WITH MINOR
-CHANGES, 0 Critical, 2 Important, 7 Suggestions. Actioned both
-Importants and 4 of the 7 Suggestions in the same commit. Deferred
-(captured below):
+**Phase 6.1 + 6.2 implementation (`delivery_module` wired):**
+- `metadata.json` gains `delivery_module` dep; module-builder filters
+  flakeInputs by `config.dependencies` and emits a typed
+  `DeliveryModule delivery_module` accessor.
+- New `lib/delivery_client.{h,cpp}` — same shape as `StorageClient`.
+  Lifecycle is `createNode(JSON{logLevel,mode:Core,preset:logos.dev,
+  portsShift}) → start → on("messageReceived", cb) → subscribe(topic)`.
+  Registration order matches the upstream demo
+  (`logos-co/logos-delivery-demo`).
+- `publish(refBytes)` base64-encodes ourselves before
+  `delivery_module.send(topic, payload)`, because the upstream send()
+  does `payload.toUtf8().toBase64()` internally — raw binary protobuf
+  would be UTF-8-mangled. The wire ends up with
+  `base64(our_base64(refBytes))`. `onMessageReceivedRaw` double-decodes.
+- Plugin `submitPhoto` publishes after successful upload + store
+  append; pre-seeds `knownHashes_ : QSet<QByteArray>` with the
+  hash so the inevitable Delivery fan-back of our own broadcast is
+  deduped silently. Inbound from peers (`_onDeliveryReceived`)
+  protobuf-parses, dedupes, appends to store, emits
+  `referenceObserved` — same path as local submit so the UI flow is
+  unified.
+- `subscribeFeed()` is no longer a stub; UI calls it on init so
+  Delivery is warm before any peer broadcast.
+- `portsShift` default is random in [100, 4600) to avoid alice/bob
+  port collision on one box; overridable via
+  `LOGOS_DELIVERY_PORTS_SHIFT` env var (e.g.
+  `LOGOS_DELIVERY_PORTS_SHIFT=200 ./scripts/launch-witness.sh bob`).
+
+**Visible delivery state in the UI:**
+- New `Live` / `Offline` pill in the Timeline header, bound to
+  `root.deliveryReady` which polls the new
+  `core.deliveryReady()` Q_INVOKABLE every 5 s + on init. Green
+  pill when subscribed + reachable; red pill when init or
+  subscribe failed.
+- `submitPhoto` return now carries `delivery_ok : bool` (+
+  `delivery_error : string` on failure). UI surfaces a
+  "Saved locally — not broadcast: <err>" warning banner in the
+  same slot as the upload error banner — no silent fallback
+  when the ref is durable locally but didn't reach the network.
+
+**Code review (Phase 6, this commit):** Done 2026-05-15 via
+`agent-skills:code-reviewer`. Verdict: APPROVE WITH MINOR CHANGES,
+0 Critical, 2 Important, 5 Suggestions. Both Importants actioned
+(`delivery_ok` in return shape, Live/Offline badge). Carry-forwards
+captured below.
+
+**Resume here:** Phase 7 (Pending queue + manual inscribe via
+`zone-sdk`). One known UX bug surfaced by dogfood that should land
+before Phase 7 starts (see follow-ups).
+
+**Follow-ups carried forward (across Phase 5 + 6 reviews, dogfood):**
+
+- **Submit timestamp default + cursor sync (UX, surfaced 2026-05-15
+  during Phase 6 dogfood):** SubmitDialog's `capturedAt` defaults to
+  "now" (dialog-open time). If the user has been browsing the time
+  cursor in the past — or just leaves the dialog open for a while —
+  the submitted ref's timestamp lands outside the visible window, so
+  the new marker + row do not appear after submit (even though the
+  upload + Delivery publish both succeeded). Right fix: read EXIF
+  `DateTimeOriginal` from the picked photo and use that as the
+  default; "now" survives only as a fallback for photos without
+  EXIF (screenshots, edited files, etc.). Pre-existing
+  `When ⚠` validation contract keeps user override. Secondary
+  consideration: even with EXIF, the cursor doesn't auto-pan to
+  contain a fresh ref; consider a one-shot "jump to new ref" on
+  successful submit, gated behind a SPEC §11 amendment so the
+  centered-playhead contract stays intentional. Owner of this:
+  whoever picks up the next UI touch — probably bundle with the
+  SubmitDialog dead-state cleanup below.
 - **`SubmitDialog.qml`** still carries `submitting` and `lastError`
   properties (lines 43-44) that are no longer mutated — Main.qml
   owns the failure path now. `&& !submitting` in `_canSubmit` is
   dead. Clean up in next UI touch.
 - **Theme palette extraction**: banner + frame colours are hex
   literals (`#fdecea`, `#eaf3fd`, `#1d4f7d`, `#c0392b`, `#fafafa`,
-  `#ccc`, `#888`, …) scattered across `Main.qml`, `MapView.qml`,
-  `SubmitDialog.qml`. A `Theme.qml` singleton or a `Theme` JS
-  object next to `TimelineModel.js` would centralise these. Worth
-  doing before Phase 6 adds Delivery-status colours too.
+  `#ccc`, `#888`, `#e7f7ec`/`#fbeaea` for the Live/Offline pill,
+  …) scattered across `Main.qml`, `MapView.qml`, `SubmitDialog.qml`.
+  A `Theme.qml` singleton or a `Theme` JS object next to
+  `TimelineModel.js` would centralise these. Bundle with the
+  SubmitDialog cleanup.
 - **Storage `bootstrap-node` gap**: `buildStorageConfig` doesn't
   set `bootstrap-node`, so each instance discovers peers only via
   UPnP + local discv5. Single-instance dogfood works; two-instance
-  pairing needs the peer SPR wired through. Block on a SPEC §2.1
-  amendment + a `scaffold.toml` per-profile mechanism (overlaps
-  with logos-co/scaffold#163).
+  Storage pairing needs the peer SPR wired through. (Delivery
+  already discovers peers via the logos.dev public fleet, so this
+  only blocks cross-instance photo *fetch* not cross-instance
+  *reference broadcast*.) Block on a SPEC §2.1 amendment + a
+  `scaffold.toml` per-profile mechanism (overlaps with
+  logos-co/scaffold#163).
+- **Delivery launcher polish (Phase 6 follow-up):** bake
+  `LOGOS_DELIVERY_PORTS_SHIFT` per-profile defaults into
+  `scripts/launch-witness.sh` so two-instance dogfood doesn't need
+  the env var set by hand. Retire once scaffold#163 lands and
+  scaffold.toml can declare per-profile env directly.
+- **Bounded dedupe set:** `knownHashes_ : QSet<QByteArray>` grows
+  unbounded with unique inscriptions. Fine at v0 demo scale; Phase
+  8/9 should swap to a bounded LRU or move to the persistent
+  pending-queue index once Phase 7 ships.
+- **Upstream `sendBytes(topic, QByteArray)`:** the double-base64
+  encode/decode in `delivery_client.cpp` is a workaround for
+  `delivery_module.send()` running `payload.toUtf8().toBase64()`
+  internally. PR upstream to add a `QByteArray`-typed sibling
+  method to retire the workaround.
 - **Upstream docstring fix**: open a one-line PR on
   `logos-co/logos-storage-module` to correct the `listen-addrs`
   example in `storage_module_interface.h:23` so the next consumer

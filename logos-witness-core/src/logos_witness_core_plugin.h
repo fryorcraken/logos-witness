@@ -9,8 +9,11 @@
 #include "logos_witness_core_interface.h"
 #include "logos_api.h"
 #include "logos_sdk.h"
+#include "../lib/delivery_client.h"
 #include "../lib/in_memory_store.h"
 #include "../lib/storage_client.h"
+
+#include <QSet>
 
 class LogosWitnessCorePlugin : public QObject, public LogosWitnessCoreInterface
 {
@@ -38,18 +41,34 @@ public:
 
     Q_INVOKABLE void initLogos(LogosAPI* logosAPIInstance);
 
+    // Liveness probe for the UI's Delivery status badge. Returns the
+    // current value of `deliveryReady_`; not part of the locked
+    // interface (UI-only convenience).
+    Q_INVOKABLE bool deliveryReady() const { return deliveryReady_; }
+
 signals:
     void referenceObserved(const QByteArray& refBytes);
     void inscriptionsLoaded(const QVariantList& refs);
 
+private slots:
+    void _onDeliveryReceived(const QByteArray& refBytes);
+
 private:
     QString cacheDir() const;
     bool _ensureStorage();
+    bool _ensureDelivery();
 
     LogosModules* logos = nullptr;
     InMemoryStore store_;
     StorageClient* storage_ = nullptr;
     bool storageReady_ = false;
+    DeliveryClient* delivery_ = nullptr;
+    bool deliveryReady_ = false;
+    // Dedupe key: content_hash of every Reference we've already seen
+    // (local submit + inbound from Delivery). Same hash from both
+    // sources collapses to one timeline entry. v0: no eviction; the
+    // set grows linearly with unique refs, fine for the demo scale.
+    QSet<QByteArray> knownHashes_;
 };
 
 #endif

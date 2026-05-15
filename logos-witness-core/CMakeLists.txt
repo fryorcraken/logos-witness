@@ -54,22 +54,25 @@ if(NOT EXISTS ${LOGOS_GENERATED_DIR}/include/logos_sdk.h)
         file(RENAME ${c} ${LOGOS_GENERATED_DIR}/include/${_cn})
     endforeach()
     # Pull in any include files shipped by declared module dependencies
-    # (storage_module ships storage_module_api.h/.cpp under
-    # packages.<system>.default/include — copy them in). The nix build
-    # gets these via moduleInputs; for dev-shell ctest we shell out to
-    # `nix build` to discover the same path.
-    execute_process(
-        COMMAND nix build --no-link --print-out-paths
-                github:logos-co/logos-storage-module
-        OUTPUT_VARIABLE _sm_path
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        RESULT_VARIABLE _sm_rc)
-    if(_sm_rc EQUAL 0 AND EXISTS "${_sm_path}/include")
-        file(GLOB _sm_files "${_sm_path}/include/*")
-        file(COPY ${_sm_files} DESTINATION ${LOGOS_GENERATED_DIR}/include)
-    else()
-        message(WARNING "storage_module include dir not resolved; plugin link may fail")
-    endif()
+    # (storage_module + delivery_module ship <name>_api.{h,cpp} under
+    # packages.<system>.default/include). The nix build gets these via
+    # moduleInputs; for dev-shell ctest we shell out to `nix build` to
+    # discover the same path.
+    foreach(_dep_url
+            github:logos-co/logos-storage-module
+            github:logos-co/logos-delivery-module)
+        execute_process(
+            COMMAND nix build --no-link --print-out-paths ${_dep_url}
+            OUTPUT_VARIABLE _dep_path
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE _dep_rc)
+        if(_dep_rc EQUAL 0 AND EXISTS "${_dep_path}/include")
+            file(GLOB _dep_files "${_dep_path}/include/*")
+            file(COPY ${_dep_files} DESTINATION ${LOGOS_GENERATED_DIR}/include)
+        else()
+            message(WARNING "${_dep_url} include dir not resolved; plugin link may fail")
+        endif()
+    endforeach()
 endif()
 
 set(PROTO_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR})
@@ -101,6 +104,8 @@ logos_module(
         lib/exif_strip.cpp
         lib/storage_client.h
         lib/storage_client.cpp
+        lib/delivery_client.h
+        lib/delivery_client.cpp
         ${PROTO_SRC}
         ${PROTO_HDR}
     INCLUDE_DIRS

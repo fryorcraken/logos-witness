@@ -17,6 +17,9 @@ namespace {
 
 constexpr quint32 kSchemaVersion = 1;
 constexpr int     kGeohashPrecision = 8;
+// SPEC §2: single global topic for v0. Trailing `/proto` names the
+// wire encoding per LIP-23.
+constexpr const char* kDeliveryTopic = "/logos-witness/1/inscriptions/proto";
 
 QVariantMap referenceToVariant(const logos::witness::v1::Reference& r) {
     QVariantMap m;
@@ -77,6 +80,7 @@ LogosWitnessCorePlugin::LogosWitnessCorePlugin(QObject* parent)
 
 LogosWitnessCorePlugin::~LogosWitnessCorePlugin()
 {
+    delete delivery_;
     delete storage_;
     delete logos;
 }
@@ -121,6 +125,51 @@ bool LogosWitnessCorePlugin::_ensureStorage()
     storageReady_ = true;
     qInfo() << "_ensureStorage: storage_module ready";
     return true;
+}
+
+bool LogosWitnessCorePlugin::_ensureDelivery()
+{
+    if (deliveryReady_) return true;
+    if (!logos || !logos->api) {
+        qWarning() << "_ensureDelivery: no LogosAPI";
+        return false;
+    }
+
+    delivery_ = new DeliveryClient(logos, this);
+    connect(delivery_, &DeliveryClient::referenceReceived,
+            this,      &LogosWitnessCorePlugin::_onDeliveryReceived);
+
+    qInfo() << "_ensureDelivery: subscribing to" << kDeliveryTopic;
+    if (!delivery_->init(QString::fromUtf8(kDeliveryTopic))) {
+        qWarning() << "_ensureDelivery: init failed";
+        delete delivery_;
+        delivery_ = nullptr;
+        return false;
+    }
+    deliveryReady_ = true;
+    qInfo() << "_ensureDelivery: delivery_module ready";
+    return true;
+}
+
+void LogosWitnessCorePlugin::_onDeliveryReceived(const QByteArray& refBytes)
+{
+    logos::witness::v1::Reference ref;
+    if (!ref.ParseFromArray(refBytes.constData(), refBytes.size())) {
+        qWarning() << "_onDeliveryReceived: protobuf parse failed";
+        return;
+    }
+    const QByteArray hash(ref.content_hash().data(),
+                          static_cast<int>(ref.content_hash().size()));
+    if (knownHashes_.contains(hash)) {
+        // Local submit fan-back, or a peer re-broadcast of a ref we
+        // already have. SPEC §2: content_hash is the dedupe key.
+        return;
+    }
+    knownHashes_.insert(hash);
+    store_.append(refBytes);
+    qInfo() << "_onDeliveryReceived: new ref from peer, content_hash="
+            << hash.toHex().left(16);
+    emit referenceObserved(refBytes);
 }
 
 QString LogosWitnessCorePlugin::cacheDir() const
@@ -187,6 +236,28 @@ QVariantMap LogosWitnessCorePlugin::submitPhoto(const QString& filePath,
     if (!ref.SerializeToString(&buf)) return errorMap("protobuf serialize failed");
     const QByteArray refBytes(buf.data(), static_cast<int>(buf.size()));
     store_.append(refBytes);
+    // Pre-seed the dedupe set so Delivery's fan-back of our own publish
+    // doesn't re-process the ref. The content_hash here is over the
+    // stripped bytes (set above as the protobuf field).
+    knownHashes_.insert(hash);
+
+    // Publish to the live feed. The ref is durable in the local store
+    // either way, so a publish failure is not fatal — but it IS visible
+    // to the caller: the return shape carries `delivery_ok` so the UI
+    // can render a "saved locally, not broadcast" affordance. No silent
+    // fallbacks (project memory).
+    bool deliveryOk = false;
+    QString deliveryErr;
+    if (_ensureDelivery()) {
+        deliveryOk = delivery_->publish(refBytes);
+        if (!deliveryOk) deliveryErr = "delivery_module.send failed";
+    } else {
+        deliveryErr = "delivery_module not ready";
+    }
+    if (!deliveryOk) {
+        qWarning() << "submitPhoto: delivery publish failed:" << deliveryErr
+                   << "(ref kept locally)";
+    }
 
     emit referenceObserved(refBytes);
 
@@ -194,6 +265,8 @@ QVariantMap LogosWitnessCorePlugin::submitPhoto(const QString& filePath,
     r.insert("ok", true);
     r.insert("content_hash", hash.toHex());
     r.insert("storage_cid", cid);
+    r.insert("delivery_ok", deliveryOk);
+    if (!deliveryOk) r.insert("delivery_error", deliveryErr);
     return r;
 }
 
@@ -245,8 +318,14 @@ QVariantMap LogosWitnessCorePlugin::flushBatch() {
 }
 
 void LogosWitnessCorePlugin::subscribeFeed() {
-    // Stub: Delivery subscribe wired in Phase 6. Today, referenceObserved
-    // signals fire from local submitPhoto only.
+    // Idempotent opt-in to the live Delivery feed. The first call brings
+    // up the delivery_module node + subscribes to the witness topic; the
+    // first inbound message after that fires _onDeliveryReceived →
+    // referenceObserved. Calling submitPhoto without first calling
+    // subscribeFeed is still fine — submitPhoto lazy-inits the same
+    // path. The UI is expected to call subscribeFeed during init so the
+    // subscriber is up before any peer broadcasts arrive.
+    _ensureDelivery();
 }
 
 QVariantMap LogosWitnessCorePlugin::decodeReference(const QByteArray& refBytes) {
