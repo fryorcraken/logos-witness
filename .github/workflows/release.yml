@@ -1,0 +1,241 @@
+# Tagged release pipeline. Builds the `.#lgx-portable` bundles for both
+# witness modules and attaches them to a GitHub Release alongside a
+# combined tarball + SHA256SUMS, per SPEC §9 "Release artifacts".
+#
+# Scope of this v0.0.x cut: Linux x86_64 only. SPEC §9 mandates the full
+# matrix (Linux x86_64 + Linux aarch64 + macOS arm64 + macOS x86_64) for
+# the eventual v0.1.0 ship, but that requires runner + build-system work
+# we haven't done yet (notably macOS Nix + storage_module/delivery_module
+# cross-platform tests). The single-platform carveout is called out in
+# every release's body so downstream installers know what they're
+# getting.
+#
+# Trigger: any tag matching `v*.*.*` (incl. -rc/-alpha pre-releases). The
+# `gh release` step marks pre-releases automatically when the tag has a
+# `-` suffix or matches v0.0.x.
+#
+# Refuses to publish if main CI on the tagged commit hasn't passed yet
+# (per SPEC §9 "MUST refuse to publish if any CI gate above failed").
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write   # gh release create + upload
+
+jobs:
+  build-linux-x86_64:
+    name: Build + publish (Linux x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need full history for the CI-status check
+
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      # -------------------------------------------------------------
+      # Gate: refuse to publish if main CI on the tagged commit is red.
+      # SPEC §9: "MUST refuse to publish if any CI gate above failed on
+      # the tagged commit, including the docs gate."
+      # -------------------------------------------------------------
+      - name: Verify CI passed on tagged commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          tag_sha=$(git rev-parse HEAD)
+          echo "Tagged commit: $tag_sha"
+          # Poll up to ~15 min for a completed CI run on this SHA.
+          # Pinning to the workflow filename (not the `name:` from
+          # ci.yml) keeps this gate robust to a future rename of the
+          # workflow's display name.
+          for _ in $(seq 1 90); do
+            line=$(gh run list \
+              --commit "$tag_sha" --workflow ci.yml \
+              --limit 1 --json status,conclusion \
+              --jq '.[0] | "\(.status) \(.conclusion)"' 2>/dev/null || echo)
+            echo "  CI: $line"
+            case "$line" in
+              "completed success") exit 0 ;;
+              "completed "*)
+                echo "::error::CI failed on $tag_sha (conclusion: ${line#completed })"
+                exit 1
+                ;;
+            esac
+            sleep 10
+          done
+          echo "::error::Timed out waiting for CI on $tag_sha — was the tag pushed before the upstream commit?"
+          exit 1
+
+      # -------------------------------------------------------------
+      # Build the portable bundles. Each is a self-contained .lgx with
+      # the plugin + its direct runtime libs (deps are NOT bundled —
+      # storage_module + delivery_module install separately, per
+      # logos-module-builder convention; the consuming basecamp owns
+      # dep installation).
+      # -------------------------------------------------------------
+      - name: Build core module .#lgx-portable
+        working-directory: logos-witness-core
+        run: nix build '.#lgx-portable' -o result-portable --print-build-logs
+
+      - name: Build UI module .#lgx-portable
+        working-directory: logos-witness-ui-qml
+        run: nix build '.#lgx-portable' -o result-portable --print-build-logs
+
+      # -------------------------------------------------------------
+      # Pack assets per SPEC §9. Filenames carry version + platform so a
+      # release page hosting multiple builds is unambiguous. Manifest
+      # records basecamp pin (so installers can verify compatibility)
+      # and tool versions used for the build.
+      # -------------------------------------------------------------
+      - name: Pack release assets
+        id: pack
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          platform="linux-x86_64"
+          stage="${RUNNER_TEMP:-/tmp}/release-stage"
+          mkdir -p "$stage"
+
+          # logos-module-builder names .lgx outputs differently for
+          # the two module types: C++ core modules get a `-module-lib`
+          # suffix in the bundle filename, QML UI modules get just
+          # `-module`. The mismatch is upstream convention, not a
+          # typo. SOURCE: lib/mkModuleLgxBundle.nix in
+          # logos-module-builder.
+          core_src="logos-witness-core/result-portable/logos-logos_witness_core-module-lib.lgx"
+          ui_src="logos-witness-ui-qml/result-portable/logos-logos_witness_ui_qml-module.lgx"
+          test -f "$core_src" || { echo "::error::core .lgx not found"; exit 1; }
+          test -f "$ui_src"   || { echo "::error::UI .lgx not found"; exit 1; }
+
+          core_dst="logos_witness_core-${version}-${platform}.lgx"
+          ui_dst="logos_witness_ui_qml-${version}-${platform}.lgx"
+          cp "$core_src" "$stage/$core_dst"
+          cp "$ui_src"   "$stage/$ui_dst"
+
+          # Per-asset checksum block embedded in the bundle manifest.
+          # The `lgs` version SPEC §9 nominally wants is replaced here
+          # with the logos-module-builder + storage_module + delivery
+          # _module lock hashes from each module's flake.lock — those
+          # are the actual revs that produced the bundles; the GHA
+          # runner doesn't install `lgs` and we build via `nix build`
+          # directly. A consuming installer can verify compatibility
+          # by comparing the basecamp pin + builder hash to its own.
+          basecamp_pin=$(awk -F\" '/^pin/ {print $2; exit}' \
+            < <(sed -n '/\[repos\.basecamp\]/,/^\[/p' scaffold.toml))
+          builder_rev=$(jq -r \
+            '.nodes["logos-module-builder"].locked.rev' \
+            logos-witness-core/flake.lock)
+          storage_rev=$(jq -r \
+            '.nodes["storage_module"].locked.rev' \
+            logos-witness-core/flake.lock)
+          delivery_rev=$(jq -r \
+            '.nodes["delivery_module"].locked.rev' \
+            logos-witness-core/flake.lock)
+          {
+            echo "logos-witness $version ($platform)"
+            echo
+            echo "## Modules"
+            (cd "$stage" && sha256sum "$core_dst" "$ui_dst")
+            echo
+            echo "## Toolchain"
+            echo "basecamp pin: $basecamp_pin"
+            echo "logos-module-builder rev: $builder_rev"
+            echo "storage_module rev: $storage_rev"
+            echo "delivery_module rev: $delivery_rev"
+            echo "nix runner: $(nix --version)"
+            echo "build date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "commit: $(git rev-parse HEAD)"
+          } > "$stage/manifest.txt"
+
+          tar -C "$stage" \
+            -czf "$stage/logos-witness-${version}-${platform}.tar.gz" \
+            "$core_dst" "$ui_dst" manifest.txt
+
+          # Top-level SHA256SUMS over everything that will be uploaded.
+          (cd "$stage" && sha256sum "$core_dst" "$ui_dst" \
+            "logos-witness-${version}-${platform}.tar.gz" \
+            > SHA256SUMS)
+
+          ls -la "$stage"
+          echo "stage=$stage"            >> "$GITHUB_OUTPUT"
+          echo "version=$version"        >> "$GITHUB_OUTPUT"
+          # Pre-release classification: any `-` suffix (rc/alpha/beta/dev)
+          # or 0.0.x is treated as pre-release on the GH side.
+          case "$version" in
+            *-* | 0.0.*) prerelease=true ;;
+            *)           prerelease=false ;;
+          esac
+          echo "prerelease=$prerelease"  >> "$GITHUB_OUTPUT"
+
+      # -------------------------------------------------------------
+      # Publish. We deliberately fail loudly if the release already
+      # exists at this tag — re-cutting a release silently is the kind
+      # of operator footgun SPEC §9 warns about ("releases without the
+      # full set of assets are considered broken and must be re-cut,
+      # not patched").
+      # -------------------------------------------------------------
+      - name: Create GitHub Release + upload assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STAGE: ${{ steps.pack.outputs.stage }}
+          VERSION: ${{ steps.pack.outputs.version }}
+          PRERELEASE: ${{ steps.pack.outputs.prerelease }}
+        run: |
+          set -eu
+          notes="${RUNNER_TEMP:-/tmp}/release-notes.md"
+          {
+            echo "## logos-witness v$VERSION"
+            echo
+            echo "Tagged build of the witness app. Linux x86_64 only;"
+            echo "macOS + aarch64 land before the v0.1.0 final tag."
+            echo
+            echo "### Install"
+            echo
+            echo "Drop the two \`.lgx\` files into your basecamp's"
+            echo "modules + UI plugins dirs (or use \`lgpm install\`)."
+            echo "The witness modules require \`storage_module\` and"
+            echo "\`delivery_module\` to be installed separately — see"
+            echo "the README for the supported pins."
+            echo
+            echo "### Assets"
+            echo
+            echo "* \`logos_witness_core-${VERSION}-linux-x86_64.lgx\` — headless plugin"
+            echo "* \`logos_witness_ui_qml-${VERSION}-linux-x86_64.lgx\` — QML UI plugin"
+            echo "* \`logos-witness-${VERSION}-linux-x86_64.tar.gz\` — bundle of the above + manifest"
+            echo "* \`SHA256SUMS\` — checksums for all assets"
+          } > "$notes"
+
+          # `gh release create --prerelease` is a pure flag (no
+          # =bool form). Split into two branches rather than build an
+          # optional-flag array under `set -u`, which trips up older
+          # bash on empty-array expansion. SPEC §9 explicitly warns
+          # "broken releases must be re-cut, not patched", so silently
+          # shipping a stable release for a tag that should have been
+          # pre-release is the kind of operator footgun to avoid.
+          assets=(
+            "$STAGE/logos_witness_core-${VERSION}-linux-x86_64.lgx"
+            "$STAGE/logos_witness_ui_qml-${VERSION}-linux-x86_64.lgx"
+            "$STAGE/logos-witness-${VERSION}-linux-x86_64.tar.gz"
+            "$STAGE/SHA256SUMS"
+          )
+          if [ "$PRERELEASE" = "true" ]; then
+            gh release create "v$VERSION" \
+              --title "v$VERSION" --notes-file "$notes" \
+              --prerelease "${assets[@]}"
+          else
+            gh release create "v$VERSION" \
+              --title "v$VERSION" --notes-file "$notes" \
+              "${assets[@]}"
+          fi

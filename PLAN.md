@@ -1301,25 +1301,41 @@ docs gate fails. Fix; passes.
 
 ### Task 9.2: Release workflow with `.lgx` asset upload
 
-**Description:** Tag `v0.1.0` triggers a release workflow producing
-per-platform `.lgx-portable` for both modules + combined tarball +
-SHA256SUMS, attached via `gh release upload`.
+**Description:** Tag `v*.*.*` triggers a release workflow producing
+`.lgx-portable` for both modules + combined tarball + SHA256SUMS,
+attached via `gh release create`. Pre-launch v0.0.x cuts are
+Linux x86_64 only; SPEC §9's full 4-platform matrix is held back
+until v0.1.0 ship-readiness.
 
 **Acceptance criteria:**
-- [ ] `git tag v0.1.0 && git push --tags` triggers the workflow
-- [ ] Release page shows all required assets per SPEC §9
-- [ ] Workflow refuses to publish if any CI gate failed
+- [x] `git tag vX.Y.Z && git push --tags` triggers the workflow
+- [x] Release page shows the linux-x86_64 asset set per SPEC §9
+- [x] Workflow refuses to publish if `CI` on the tagged commit failed
+- [ ] Full 4-platform matrix attached to release (held for v0.1.0;
+      tracked under "v0.1.0 ship-readiness" below)
 
-**Verification:** Cut a `v0.1.0-rc1` against this plan's completion.
+**Verification:** First cut `v0.0.1` against the post-Phase-6 main —
+inspect the release page for assets + SHA256SUMS + tarball with
+manifest.
 
-**Dependencies:** 9.1, full feature set. **Scope:** M.
+**Status (2026-05-15):** Workflow lives at
+`.github/workflows/release.yml`. First release tagged from
+`c6d1ec1` (Phase 6 cross-instance feed). Carve-out (Linux only) is
+called out in every generated release body.
+
+**Dependencies:** 9.1. **Scope:** M.
 
 ### Checkpoint: v0 ship-ready
 
-- [ ] Two-instance demo works end-to-end
-- [ ] CI green on `main`
-- [ ] Release `v0.1.0-rc1` published with all assets
+- [x] Two-instance demo works end-to-end (Phase 6 dogfood 2026-05-15)
+- [x] CI green on `main`
+- [x] First release tag (`v0.0.1`) published with the Linux x86_64
+      asset set
 - [ ] README quickstart matches the live release
+- [ ] Phase 7 (chain inscribe) shipped
+- [ ] Phase 8 (missing-blob UX) shipped
+- [ ] `v0.1.0` release: full SPEC §9 4-platform matrix attached
+      (Linux x86_64 + aarch64, macOS arm64 + x86_64)
 
 ---
 
