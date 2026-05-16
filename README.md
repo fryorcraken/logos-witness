@@ -89,6 +89,23 @@ typed clients on first use.
 - The `lgs` scaffold CLI ([`logos-co/logos-scaffold`](https://github.com/logos-co/logos-scaffold))
 - Git
 
+### Basecamp compatibility
+
+This release is built against
+[`logos-basecamp@pre-release-b44a5cf-260`](https://github.com/logos-co/logos-basecamp/tree/pre-release-b44a5cf-260)
+(2026-05-08). The pin lives in [`scaffold.toml`](./scaffold.toml) and is
+recorded in every release's `manifest.txt`.
+
+The newest tagged RC, `0.1.2-RC2`, is **not** compatible: it bundles an
+older `lgpm` that rejects QML-only modules whose `manifest.json`
+declares `main: {}` — which is our UI module's shape. The fix landed
+one `lgpm` commit later (PR #9, `865fc5a`); `pre-release-b44a5cf-260`
+is the first basecamp release to bundle that fix. The full rationale
+is captured in the `scaffold.toml` comment block. Running this build
+against a different basecamp pin is unsupported — the witness modules'
+Qt 6.9.2 ABI and the bundled lgpm's manifest-validation rules are both
+load-bearing.
+
 ## Install from a tagged release (Linux x86_64)
 
 Each tagged release attaches portable `.lgx` bundles for both witness

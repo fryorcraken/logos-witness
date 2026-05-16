@@ -194,12 +194,30 @@ jobs:
           PRERELEASE: ${{ steps.pack.outputs.prerelease }}
         run: |
           set -eu
+          # Pull the basecamp pin out of scaffold.toml for the
+          # compatibility callout. The exact same value goes into
+          # manifest.txt above, so the release body and the manifest
+          # are always consistent.
+          basecamp_pin=$(awk -F\" '/^pin/ {print $2; exit}' \
+            < <(sed -n '/\[repos\.basecamp\]/,/^\[/p' scaffold.toml))
           notes="${RUNNER_TEMP:-/tmp}/release-notes.md"
           {
             echo "## logos-witness v$VERSION"
             echo
             echo "Tagged build of the witness app. Linux x86_64 only;"
             echo "macOS + aarch64 land before the v0.1.0 final tag."
+            echo
+            echo "### Compatibility"
+            echo
+            echo "Built against [logos-basecamp \`$basecamp_pin\`](https://github.com/logos-co/logos-basecamp/tree/$basecamp_pin)."
+            echo "Newer pins should work; the latest tagged RC"
+            echo "(\`0.1.2-RC2\`) does **not** — it bundles an older"
+            echo "\`lgpm\` that rejects QML-only modules. See"
+            echo "\`scaffold.toml\` for the full rationale. The exact"
+            echo "toolchain pin set (basecamp + lgpm +"
+            echo "logos-module-builder + storage_module +"
+            echo "delivery_module revs) is recorded in"
+            echo "\`manifest.txt\` inside the combined tarball."
             echo
             echo "### Install"
             echo
