@@ -168,15 +168,20 @@ the UI module and any `logoscore`/CLI consumer programs against. It splits
 into two groups:
 
 - **Behavioural** (state-changing or store-reading):
-  - `submitPhoto(filePath, timestamp, geohash) → {ok, error?, content_hash?, storage_cid?}`
-    — return shape gains `storage_cid` per §2.1.
-  - `fetchPhoto(cid) → {ok, error?, file_url?}` — async-internally,
-    sync-externally; the file_url points at a per-process cache
-    location populated from Storage. See §2.1 download path.
+  - `submitPhoto(filePath, timestamp, geohash) → {ok, error?, content_hash?, storage_cid?, delivery_ok?, delivery_error?}`
+    — `storage_cid` per §2.1; `delivery_ok` per §2.2 (false when the
+    ref was stored locally but did not reach the Delivery network).
+  - `fetchPhoto(cid) → {ok, error?, data_url?}` — async-internally,
+    sync-externally; `data_url` is a `data:image/jpeg;base64,…` URL
+    (workaround for basecamp's DenyAll `QNetworkAccessManager`; see
+    §7 item 6). Populated from Storage; see §2.1 download path.
   - `listInscriptions(filter?) → [Reference, …]` — each Reference now
     includes `storage_cid` as a string field.
   - `flushBatch() → {ok, error?, flushed?}`
   - `subscribeFeed() → void` (idempotent opt-in to the live feed; signals follow)
+  - `deliveryReady() → bool` — synchronous probe of the live-feed
+    health, drives the UI's Live/Offline indicator. Cheap; called on
+    a ~5 s tick from the UI poll loop. See §2.2.
 - **Wire-format decoders** (pure functions over wire-format bytes):
   - `decodeReference(QByteArray refBytes) → {ok, error?, schema_version?, content_hash?, timestamp?, geohash?}`
   - `decodeGeohash(QString geohash) → {ok, error?, latitude?, longitude?}`
@@ -244,6 +249,64 @@ amendment time — Phase 7 hasn't shipped) will deserialize with
 retrieval address known" and fall back to the missing-blob path.
 `schema_version` stays at `1`: this is an additive field, not a
 schema break.
+
+### 2.2 Delivery integration
+
+Delivery is provided by the upstream `logos-co/logos-delivery-module`
+LGX — a Qt6 wrapper around `liblogosdelivery` (waku-derived). Same
+shape as §2.1: registered in `scaffold.toml`, installed by `lgs
+basecamp install`, accessed by `logos_witness_core` via the typed
+`LogosModules::delivery_module` accessor. The UI does not call
+Delivery directly.
+
+**Node lifecycle.** Owned by the core, idempotent:
+
+1. On first `submitPhoto` or explicit `subscribeFeed`, call
+   `delivery_module.createNode(jsonCfg)`. Config is
+   `{logLevel, mode:"Core", preset:"logos.dev", portsShift}` —
+   `portsShift` is a random offset (overridable via
+   `LOGOS_DELIVERY_PORTS_SHIFT` env var) so two profiles on one box
+   don't collide on tcp/discv5/api ports.
+2. Call `delivery_module.start()` (synchronous bool).
+3. Register `on("messageReceived", cb)` BEFORE subscribing so no
+   inbound is dropped between start and the on() call.
+4. Call `delivery_module.subscribe(topic)`.
+
+**Liveness signal.** The `deliveryReady()` Q_INVOKABLE on the core
+returns the current value of an internal `deliveryReady_` flag —
+true after the four lifecycle steps above complete successfully,
+false otherwise. The UI polls this every 5 s to drive the
+Live/Offline indicator. Polling instead of a push signal is a
+pragmatic shortcut from before the hybrid UI scaffold landed (see
+§5); task #27 may swap it for a typed signal subscription.
+
+**Publish path.** After a successful `submitPhoto` upload, the core
+calls `delivery_publish(refBytes)`. The upstream `send()` internally
+runs `payload.toUtf8().toBase64()` — raw protobuf bytes are not
+valid UTF-8, so we pre-encode the bytes to base64 ourselves before
+`send()`. The wire ends up carrying `base64(our_base64(refBytes))`;
+the receiver double-decodes. This is a workaround documented inline
+in `lib/delivery_client.cpp` and tracked as an upstream feature
+request for a `sendBytes(topic, QByteArray)` API.
+
+`submitPhoto`'s return shape carries `delivery_ok: bool` and
+`delivery_error?: string`. A `delivery_ok=false` is **not fatal** —
+the ref is durable in the local store and the UI surfaces a "saved
+locally — not broadcast" warning banner. No silent fallbacks.
+
+**Subscribe path.** On `messageReceived`, the core's slot
+double-decodes the payload, runs `Reference.ParseFromArray`,
+dedupes against an in-memory `QSet<QByteArray> knownHashes_` (keyed
+on `content_hash`), and on a new ref appends to the store and emits
+`referenceObserved` — the same signal path local submits use, so
+the UI flow is unified.
+
+**Bootstrap.** Delivery discovers peers via the public logos.dev
+waku fleet — `preset: "logos.dev"` resolves to a hardcoded peer
+list inside `liblogosdelivery`. We do not currently set our own
+`bootstrap-node` for the Storage side (§2.1); cross-instance
+Storage fetch over peer-to-peer paths is therefore not guaranteed
+to work today. Captured as a known gap; see PLAN.md follow-ups.
 
 ### Delivery content topic
 
@@ -371,11 +434,33 @@ exiftool -a -G1 logos-witness-core/tests/fixtures/*.stripped.jpg   # expect: not
 
 ### QML (UI module)
 
+The UI module is a **hybrid `ui_qml + C++ backend`**: a single `.lgx`
+that bundles both the QML view (`qml/Main.qml` and friends) and a
+native plugin (`logos_witness_ui_qml_plugin.so`) declared via
+`metadata.json`'s `main` field. Basecamp's loader instantiates the
+C++ plugin and calls `initLogos(LogosAPI* api)` before showing the
+QML view, so the QML side can address typed properties and slots on
+the backend via `logos.module("logos_witness_ui_qml")`. CI gates the
+bundle on every push: the `.lgx` MUST contain the `main` plugin `.so`
+alongside the QML view (see §9).
+
+Conventions:
+
 - Qt Quick / Qt Quick Controls 2 (matches `logos-tictactoe-qml` baseline).
-- Components in `components/`; only `Main.qml` at the top level.
-- Calls into the core module go through `logos.callModule("logos_witness_core",
-  "<method>", [...])`. Wrap each call site in a small JS helper rather than
-  inlining strings.
+- Top-level `qml/Main.qml` is the entry view; helper components live
+  in `qml/` alongside it. JS modules (`TimelineModel.js`,
+  `SubmitHelpers.js`) are `.pragma library`-style helpers exercised
+  by `qmltestrunner`.
+- **Two call patterns to the core, both supported:**
+  - `logos.callModule("logos_witness_core", "<method>", [...])` — the
+    framework's untyped JSON-bridge invocation. Original v0 pattern;
+    blocks the QML thread. Wrap each site in a small JS helper rather
+    than inlining strings.
+  - `logos.module("logos_witness_ui_qml").<typed-property-or-slot>` —
+    typed accessor exposed by the UI backend plugin (declared in
+    `src/logos_witness_ui_qml.rep`). New as of the hybrid scaffold;
+    task #27 migrates per-site call patterns onto this surface to
+    eliminate the QML-thread block and enable push signals.
 - No external assets fetched at runtime. All icons, fonts, and map tiles
   bundled or self-hosted (see Boundaries §7).
 
@@ -488,8 +573,14 @@ require an explicit SPEC amendment.
    filesystem roots. Consequences a UI contributor MUST design around:
    - `Image.source = file://<user-picked-path>` is rejected; only paths
      under basecamp's allowed roots resolve. The Photo tab is filename-only
-     until basecamp exposes a sanctioned local-image provider or photos
-     are routed through Logos Storage (Phase 5).
+     in the submit dialog (no inline preview of the picked file).
+   - **Photo display after upload uses a base64 `data:image/jpeg;…` URL.**
+     `fetchPhoto(cid)` downloads the bytes via `storage_module` into the
+     core's per-process cache, then returns `{ok, data_url}` —
+     `data:image/jpeg;base64,<encoded bytes>`. The QML side sets
+     `Image.source = data_url` which the sandboxed engine accepts because
+     no network or file fetch is involved. Bandwidth cost is the base64
+     overhead (≈1.33× the JPEG) which is fine for v0 photo sizes.
    - File reads of user-supplied paths happen in the core module, not in
      the UI plugin. The UI hands a path string across the
      `logos.callModule()` bridge; the core does the I/O.

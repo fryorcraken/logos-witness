@@ -3,11 +3,61 @@
 > Companion to `SPEC.md`. Vertical slices, dependency-ordered, sized S/M.
 > Each task has acceptance criteria and a concrete verification step.
 
-## Status (2026-05-15)
+## Status (2026-05-18)
 
 **Done:** Phase 0 (skipped), 1.1 / 1.2 / 1.3, 2.1, 2.2, 3.1, 3.2, 3.3, 3.4,
-3.5, 4.1, 4.2, 4.3, 5.1 (SPEC amendment + scaffold — commit `d1ee3d6`),
-5.2 (storage client integration — this commit).
+3.5, 4.1, 4.2, 4.3, 5.1 + 5.2 (Storage), 6.1 + 6.2 (Delivery), 9.1 + 9.2
+(CI + first tagged release `v0.0.1`). Phase 6 dogfood proved
+cross-instance reference broadcast; Phase 7 (chain inscribe via
+`zone-sdk`) and Phase 8 (missing-blob UX) are the remaining v0
+blockers.
+
+**v0.0.1 release (2026-05-15)** — first tagged build. Linux x86_64.
+Phases 1–6 functionality. Notes:
+https://github.com/fryorcraken/logos-witness/releases/tag/v0.0.1.
+Built against `pre-release-b44a5cf-260`. Verified hybrid UI scaffold
+landed afterward (see below).
+
+**Hybrid `ui_qml + C++ backend` scaffold (`f485dda`, 2026-05-18)** —
+`logos_witness_ui_qml` now ships a native plugin alongside the QML
+view, both in the same `.lgx`. Empty stub backend; QML call sites
+still use `logos.callModule(...)`. The scaffold unblocks task #27
+(migrate call sites onto typed slots) and gives us a deliverable
+that satisfies RC2's lgpm install rule (PR #8 requires a non-empty
+`main`). SPEC amended to document the hybrid pattern, the
+`deliveryReady()` invokable that Phase 6 added, and the data-URL
+photo-display workaround. New CI gate (`.github/workflows/ci.yml`)
+asserts every `.lgx` carries the declared `main` plugin .so + a
+SPEC §9 item 6 logoscore headless integration step.
+
+**Resume here.** Two parallel threads:
+
+1. **Verify cross-instance photo fetch** (single-box alice + bob).
+   Phase 6 verified that References propagate; we have NOT verified
+   that `fetchPhoto(cid)` on the receiving instance actually pulls
+   bytes from the originating instance's `storage_module`. SPEC §2.1
+   flags the `bootstrap-node` gap as a likely blocker. One dogfood
+   experiment — if it works, file a follow-up; if not, document the
+   limitation and move on. Task #37.
+2. **Task #27** — migrate `logos.callModule("logos_witness_core",
+   ...)` call sites onto typed slots on the new UI backend. Removes
+   the 40 ms `uploadDispatcher` Timer hack, removes the `deliveryReady`
+   poll loop in favour of a push signal, enables EXIF DateTimeOriginal
+   auto-fill in-process. Lands as v0.0.2.
+
+After both, Phase 7 (chain inscribe). Probe #25 (zone-sdk API
+discovery) is still queued and unblocks 7.2/7.3.
+
+**RC2 compatibility (probe #24, 2026-05-16; probe #32, 2026-05-16;
+probe #33 cancelled)** — RC2 (`0.1.2-RC2`) bundles lgpm `8110734`
+which requires every variant to have a non-empty `main`. Our
+pre-hybrid UI module had `main: {}` (QML-only). The hybrid scaffold
+fixes this. However, a second probe found that RC2's basecamp
+doesn't auto-load user-installed modules at startup — only the two
+built-ins come up. We stay on `pre-release-b44a5cf-260` for now;
+the user has flagged RC2 as the next stable line and a third probe
+(cancelled mid-flight) was exploring whether there's a manual
+activation step we could document.
 
 **Phase 5.2** implements the storage_module client wrapper and wires it into
 `submitPhoto` and the new `fetchPhoto` invokable. Two passes:
