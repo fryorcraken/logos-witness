@@ -172,20 +172,30 @@ StorageClient::UploadResult StorageClient::upload(const QByteArray& data,
 // ---------------------------------------------------------------------------
 // Download: streams a CID into a local file, waits for storageDownloadDone,
 // reads the file back into memory.
+//
+// Two-shot: first try `local=true` (read from this node's own repo without
+// hitting the DHT — fast path for blobs we uploaded), then fall back to
+// `local=false` (DHT lookup — needed for peer-supplied blobs). libstorage's
+// "Failed to download the manifest" error on `local=false` for a CID we
+// ourselves just uploaded is the canonical symptom: the manifest IS in our
+// repo but the DHT roundtrip hasn't found anyone advertising it yet.
 // ---------------------------------------------------------------------------
-StorageClient::DownloadResult StorageClient::download(const QString& cid,
-                                                      const QString& cacheDir)
+
+namespace {
+// Per-attempt: kicks off one downloadToUrl call (local true or false) and
+// blocks until the storageDownloadDone event for the session arrives or the
+// timer fires. Returns true on success; populates errorMsg on failure.
+struct DownloadAttempt {
+    bool ok = false;
+    QString error;
+};
+
+DownloadAttempt _downloadOnce(LogosModules* logos, const QString& cid,
+                              const QUrl& dest, bool local, int timeoutMs)
 {
-    DownloadResult r;
-    if (!started_) { r.error = "storage not ready"; return r; }
-    if (!logos_)   { r.error = "no LogosModules"; return r; }
-
-    QDir dir(cacheDir);
-    if (!dir.exists()) dir.mkpath(".");
-    const QString destPath = dir.filePath(cid + ".jpg");
-
-    LogosResult initResult = logos_->storage_module.downloadToUrl(
-        cid, QVariant::fromValue(QUrl::fromLocalFile(destPath)), /*local=*/false);
+    DownloadAttempt r;
+    LogosResult initResult = logos->storage_module.downloadToUrl(
+        cid, QVariant::fromValue(dest), local);
     if (!initResult.success) {
         r.error = "downloadToUrl failed: " + initResult.error.toString();
         return r;
@@ -203,7 +213,7 @@ StorageClient::DownloadResult StorageClient::download(const QString& cid,
     QTimer timer;
     timer.setSingleShot(true);
 
-    logos_->storage_module.on("storageDownloadDone", [&](const QVariantList& evData) {
+    logos->storage_module.on("storageDownloadDone", [&](const QVariantList& evData) {
         if (evData.size() < 2) return;
         if (evData[1].toString() != sessionId) return;
         gotEvent = true;
@@ -214,7 +224,7 @@ StorageClient::DownloadResult StorageClient::download(const QString& cid,
     });
     QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
 
-    timer.start(60000);
+    timer.start(timeoutMs);
     loop.exec();
 
     if (!gotEvent) {
@@ -224,6 +234,36 @@ StorageClient::DownloadResult StorageClient::download(const QString& cid,
     if (!success) {
         r.error = errorMsg.isEmpty() ? QStringLiteral("download failed") : errorMsg;
         return r;
+    }
+    r.ok = true;
+    return r;
+}
+}  // anonymous namespace
+
+StorageClient::DownloadResult StorageClient::download(const QString& cid,
+                                                      const QString& cacheDir)
+{
+    DownloadResult r;
+    if (!started_) { r.error = "storage not ready"; return r; }
+    if (!logos_)   { r.error = "no LogosModules"; return r; }
+
+    QDir dir(cacheDir);
+    if (!dir.exists()) dir.mkpath(".");
+    const QString destPath = dir.filePath(cid + ".jpg");
+    const QUrl destUrl = QUrl::fromLocalFile(destPath);
+
+    // Fast path: local repo. Short timeout (5s) — a true local hit
+    // returns near-instantly; failure means "not in local repo, try
+    // the network."
+    auto localAttempt = _downloadOnce(logos_, cid, destUrl, /*local=*/true, 5000);
+    if (!localAttempt.ok) {
+        // Network fallback. Longer timeout for DHT lookup + transfer.
+        auto netAttempt = _downloadOnce(logos_, cid, destUrl, /*local=*/false, 60000);
+        if (!netAttempt.ok) {
+            r.error = "local: " + localAttempt.error
+                    + " | network: " + netAttempt.error;
+            return r;
+        }
     }
 
     QFile f(destPath);

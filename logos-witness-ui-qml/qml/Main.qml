@@ -748,12 +748,14 @@ Item {
             var parsed = (typeof raw === "string") ? JSON.parse(raw) : raw
             if (parsed && parsed.ok === true && parsed.data_url) {
                 detailDialog.photoDataUrl = parsed.data_url
+                detailDialog.photoError = ""
             } else {
                 detailDialog.photoError = parsed && parsed.error
-                    ? parsed.error : "fetchPhoto returned an unexpected result"
+                    ? String(parsed.error)
+                    : "fetchPhoto returned no usable data_url"
             }
         } catch (e) {
-            detailDialog.photoError = e.toString()
+            detailDialog.photoError = "fetchPhoto threw: " + e.toString()
         } finally {
             detailDialog.photoLoading = false
         }
