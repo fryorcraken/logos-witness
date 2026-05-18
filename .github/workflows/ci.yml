@@ -162,60 +162,18 @@ jobs:
         working-directory: logos-witness-core
         run: ./lm-tool/bin/lm methods result-lib/lib/logos_witness_core_plugin.so
 
-      - name: Headless integration — logoscore module load + read-side invokables
-        working-directory: logos-witness-core
-        run: |
-          set -eu
-          # SPEC §9 item 6 ("Headless integration"). We exercise the
-          # module-load + read-side invokable path here. The full
-          # submitPhoto round-trip needs storage_module + delivery_module
-          # to come up with network access (UPnP, public waku fleet); a
-          # GHA runner can't guarantee either, and a fail-closed
-          # submitPhoto without them would just verify CI's lack of
-          # network rather than our code. So this gate boots the daemon,
-          # loads the plugin, and invokes the side-effect-free
-          # invokables (decodeReference / decodeGeohash / listInscriptions
-          # / flushBatch). The plugin's strict module-load path itself
-          # exercises ~70% of regression risk; the rest is covered by
-          # ctest + dogfood.
-          nix build 'github:logos-co/logos-logoscore-cli/tutorial-v1' --out-link logoscore-tool --print-build-logs
-          LGSCORE=./logoscore-tool/bin/logoscore
-          MODULES_DIR="$PWD/result-lib/lib"
-          test -f "$MODULES_DIR/logos_witness_core_plugin.so" || {
-            echo "::error::plugin .so not present where logoscore expects it"
-            ls -la "$MODULES_DIR"
-            exit 1
-          }
-          # Start daemon, give it a beat to come up.
-          "$LGSCORE" -D -m "$MODULES_DIR"
-          for _ in $(seq 1 20); do
-            "$LGSCORE" status >/dev/null 2>&1 && break
-            sleep 0.5
-          done
-          "$LGSCORE" load-module logos_witness_core
-          # listInscriptions on a fresh store: must succeed with [].
-          out=$("$LGSCORE" call logos_witness_core listInscriptions)
-          echo "listInscriptions: $out"
-          echo "$out" | grep -q '"status":"ok"' || {
-            echo "::error::listInscriptions did not return status=ok"
-            exit 1
-          }
-          # decodeGeohash sanity (well-known fixture from tests/test_geohash.cpp).
-          out=$("$LGSCORE" call logos_witness_core decodeGeohash u4pruydq)
-          echo "decodeGeohash: $out"
-          echo "$out" | grep -q '"ok":true' || {
-            echo "::error::decodeGeohash did not return ok=true"
-            exit 1
-          }
-          # flushBatch is a stub (Phase 7 wires zone-sdk) but must return
-          # the documented shape — catches accidental contract drift.
-          out=$("$LGSCORE" call logos_witness_core flushBatch)
-          echo "flushBatch: $out"
-          echo "$out" | grep -q '"flushed":0' || {
-            echo "::error::flushBatch stub did not return flushed=0"
-            exit 1
-          }
-          "$LGSCORE" stop
+      # SPEC §9 item 6 ("Headless integration — logoscore module load +
+      # read-side invokables") — temporarily removed 2026-05-19. The
+      # previous implementation started the daemon with `logoscore -D` in
+      # foreground, so the `status` poll never fired and CI hung until
+      # the 6 h GHA cap. Even with backgrounding fixed, the witness core
+      # plugin declares hard deps on `storage_module` + `delivery_module`
+      # (per `lm metadata`), and the bundled logoscore-cli only ships
+      # `capability_module` — `load-module logos_witness_core` would fail
+      # with "Cannot resolve dependencies". The deps-aware redo is
+      # tracked separately; the regression risk that step used to cover
+      # is partially picked up by `lm metadata` + `lm methods` above and
+      # by ctest below.
 
       - name: ctest — core unit tests
         working-directory: logos-witness-core

@@ -27,8 +27,20 @@ that satisfies RC2's lgpm install rule (PR #8 requires a non-empty
 `main`). SPEC amended to document the hybrid pattern, the
 `deliveryReady()` invokable that Phase 6 added, and the data-URL
 photo-display workaround. New CI gate (`.github/workflows/ci.yml`)
-asserts every `.lgx` carries the declared `main` plugin .so + a
-SPEC §9 item 6 logoscore headless integration step.
+asserts every `.lgx` carries the declared `main` plugin .so.
+
+**CI logoscore step temporarily removed (2026-05-19)** — the SPEC §9
+item 6 headless-integration step in `ci.yml` started `logoscore -D`
+in foreground, blocking the shell so the `status` poll never fired;
+GHA cancelled the run after 6 h (5 reds in a row on `main`).
+Backgrounding alone would not have saved it: the witness core
+plugin metadata declares hard deps on `storage_module` +
+`delivery_module`, and the bundled logoscore-cli only ships
+`capability_module` — `load-module logos_witness_core` would
+report "Cannot resolve dependencies" (verified locally against the
+cached store path). Step removed for now; the deps-aware redo is
+tracked. Coverage that remains: `lm metadata` + `lm methods`
+(catches surface drift), ctest (unit), dogfood (full round-trip).
 
 **Resume here.** Two parallel threads:
 

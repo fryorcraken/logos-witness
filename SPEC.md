@@ -666,7 +666,12 @@ Nix itself.
    tag, regardless of test-pass status above. This is the §7.1 guarantee.
 6. **Headless integration**: `logoscore` daemon load + invoke a scripted
    submitPhoto / flushBatch / listInscriptions round-trip against an
-   in-CI basecamp test fixture.
+   in-CI basecamp test fixture. *Status (2026-05-19): temporarily
+   un-wired in `ci.yml`. The first implementation hung CI to its 6 h
+   cap (foreground `-D`). A deps-aware redo is required because the
+   witness core plugin declares hard deps on `storage_module` +
+   `delivery_module` (`lm metadata`); the bundled logoscore-cli only
+   ships `capability_module`, so a naive `load-module` cannot resolve.*
 7. **Docs gate**: when the diff touches user-facing surface (any file under
    `logos-witness-core/src/`, `logos-witness-ui-qml/`, `scaffold.toml`, build
    commands in the workflow file, or `metadata.json`), CI fails unless
