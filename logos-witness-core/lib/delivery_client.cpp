@@ -81,10 +81,10 @@ bool DeliveryClient::publish(const QByteArray& refBytes)
 {
     if (!started_ || !logos_) return false;
 
-    // delivery_module.send() base64-encodes payload.toUtf8() internally;
-    // raw protobuf is not valid UTF-8 so we must pre-encode. The wire
-    // ends up with base64(our_base64(refBytes)); onMessageReceivedRaw
-    // double-decodes.
+    // delivery_module.send()'s `payload` argument is documented as taking
+    // a base64-encoded string. We pre-encode our protobuf bytes here;
+    // the receive event surfaces the same single-base64 string back
+    // (NOT doubly-encoded — see the `onMessageReceivedRaw` comment).
     const QString b64 = QString::fromLatin1(refBytes.toBase64());
     LogosResult r = logos_->delivery_module.send(topic_, b64);
     if (!r.success) {
@@ -108,17 +108,23 @@ void DeliveryClient::onMessageReceivedRaw(const QVariantList& data)
     if (recvTopic != topic_) {
         // Defensive — only subscribed to one topic in v0, but the bridge
         // could plausibly fan messages from multiple subs to one cb.
+        qCritical() << "DeliveryClient: topic mismatch, dropping";
         return;
     }
 
-    // Outer base64: the module's receive path base64s the on-wire bytes
-    // (which are the UTF-8 of our pre-encoded base64 string).
-    const QByteArray innerB64 = QByteArray::fromBase64(
+    // Single-decode: delivery_module surfaces `data[2]` as the same
+    // base64 string we passed to `send()` — NOT doubly-encoded. An
+    // earlier version of this code did `fromBase64(fromBase64(data[2]))`
+    // on the assumption (from a misread of the demo project) that the
+    // module wrapped our payload a second time on the way out. The
+    // double-decode silently truncated to half-size garbage that
+    // protobuf failed to parse; cross-instance refs arrived on the
+    // wire but were dropped here. Dogfood traced 2026-05-18 confirms
+    // single-decode is right.
+    const QByteArray refBytes = QByteArray::fromBase64(
         data[2].toString().toLatin1());
-    // Inner base64: our own encoding of the protobuf bytes.
-    const QByteArray refBytes = QByteArray::fromBase64(innerB64);
     if (refBytes.isEmpty()) {
-        qWarning() << "DeliveryClient: empty payload after double-decode";
+        qWarning() << "DeliveryClient: empty payload after decode";
         return;
     }
     emit referenceReceived(refBytes);
