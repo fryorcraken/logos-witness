@@ -67,6 +67,35 @@ QString buildStorageConfig(const QString& dataDir) {
     cfg["max-peers"] = 160;
     cfg["num-threads"] = 0;
 
+    // Join the public Logos Storage test network. Without
+    // `bootstrap-node`, our `storage_module` instances only know
+    // themselves — same-host alice + bob never discover each other,
+    // so `fetchPhoto(cid)` from bob never finds alice's blob.
+    // SPRs are pinned to the test-network bootstrap set at
+    // https://github.com/logos-co/node-configs/blob/master/storage_config_test.json
+    // (snapshot 2026-05-18). Update when that file does — the SPRs
+    // are operator-managed by status.im / logos.dev infra, not
+    // baked into libstorage. Cross-host fetch over the public
+    // network is the canonical Phase 5 path; same-host two-instance
+    // dogfood rides the same DHT.
+    QJsonArray bootstrap;
+    bootstrap.append(QString(
+        "spr:CiUIAhIhA-VlcoiRm02KyIzrcTP-ljFpzTljfBRRKTIvhMIwqBqWEgIDARpJ"
+        "CicAJQgCEiED5WVyiJGbTYrIjOtxM_6WMWnNOWN8FFEpMi-EwjCoGpYQs8n8wQYa"
+        "CwoJBHTKubmRAnU6GgsKCQR0yrm5kQJ1OipHMEUCIQDwUNsfReB4ty7JFS5WVQ6n"
+        "1fcko89qVAOfQEHixa03rgIgan2-uFNDT-r4s9TOkLe9YBkCbsRWYCHGGVJ25rLj0QE"));
+    bootstrap.append(QString(
+        "spr:CiUIAhIhApIj9p6zJDRbw2NoCo-tj98Y760YbppRiEpGIE1yGaMzEgIDARpJ"
+        "CicAJQgCEiECkiP2nrMkNFvDY2gKj62P3xjvrRhumlGISkYgTXIZozMQvcz8wQYa"
+        "CwoJBAWhF3WRAnVEGgsKCQQFoRd1kQJ1RCpGMEQCIFZB84O_nzPNuViqEGRL1vJT"
+        "jHBJ-i5ZDgFL5XZxm4HAAiB8rbLHkUdFfWdiOmlencYVn0noSMRHzn4lJYoShuVzlw"));
+    bootstrap.append(QString(
+        "spr:CiUIAhIhApqRgeWRPSXocTS9RFkQmwTZRG-Cdt7UR2N7POoz606ZEgIDARpJ"
+        "CicAJQgCEiECmpGB5ZE9JehxNL1EWRCbBNlEb4J23tRHY3s86jPrTpkQj8_8wQYa"
+        "CwoJBAXfEfiRAnVOGgsKCQQF3xH4kQJ1TipGMEQCIGWJMsF57N1iIEQgTH7IrVOg"
+        "Egv0J2P2v3jvQr5Cjy-RAiAy4aiZ8QtyDvCfl_K_w6SyZ9csFGkRNTpirq_M_QNgKw"));
+    cfg["bootstrap-node"] = bootstrap;
+
     return QString::fromUtf8(QJsonDocument(cfg).toJson(QJsonDocument::Compact));
 }
 

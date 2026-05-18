@@ -109,6 +109,21 @@ Item {
         onTriggered: root._runPendingUpload()
     }
 
+    // Same deferred-dispatch trick for fetchPhoto. Without it, clicking
+    // a marker freezes the QML thread (no dialog paint) for up to 60 s
+    // while the synchronous logos.callModule waits on the storage
+    // module's download timeout. The dialog opens first with its
+    // spinner, then this timer fires the blocking call.
+    Timer {
+        id: fetchDispatcher
+        interval: 40
+        repeat: false
+        onTriggered: {
+            var cid = detailDialog.pendingCid
+            if (cid && cid !== "") root._fetchPhoto(cid)
+        }
+    }
+
     Component.onCompleted: {
         // Warm the Delivery subscriber so peer broadcasts are caught
         // from this instance's first moment. Idempotent on the core side
@@ -418,6 +433,10 @@ Item {
         property string photoDataUrl: ""
         property bool   photoLoading: false
         property string photoError: ""
+        // CID stashed by _showDetailFor for fetchDispatcher to pick up;
+        // separated from photoDataUrl so the dispatcher can re-fire if
+        // a future "Retry" button on the dialog is added.
+        property string pendingCid: ""
 
         contentItem: ColumnLayout {
             spacing: 8
@@ -476,13 +495,49 @@ Item {
                 }
             }
 
-            Label {
+            // Error surface for fetchPhoto failures. Selectable +
+            // copyable: when the storage layer fails (network
+            // unreachable, peer missing, bootstrap not wired, …) the
+            // user needs to copy the literal error string into bug
+            // reports / Slack / logs without retyping. Plain Label
+            // doesn't allow selection; TextEdit (readOnly) does.
+            RowLayout {
                 Layout.fillWidth: true
-                wrapMode: Text.Wrap
-                color: "#c0392b"
-                font.pixelSize: 11
                 visible: detailDialog.photoError !== ""
-                text: detailDialog.photoError
+                spacing: 6
+                TextEdit {
+                    Layout.fillWidth: true
+                    readOnly: true
+                    selectByMouse: true
+                    selectByKeyboard: true
+                    wrapMode: TextEdit.Wrap
+                    color: "#c0392b"
+                    font.pixelSize: 11
+                    text: detailDialog.photoError
+                }
+                Button {
+                    text: "Copy"
+                    flat: true
+                    onClicked: {
+                        // Programmatic clipboard write — TextEdit's
+                        // own selectAll+copy doesn't fire without a
+                        // focus jump, which is jarring inside a modal
+                        // dialog. Set clipboard directly.
+                        clipboardHelper.text = detailDialog.photoError
+                        clipboardHelper.selectAll()
+                        clipboardHelper.copy()
+                    }
+                }
+                // Hidden TextEdit used purely as a clipboard shim.
+                // QtQuick.Controls TextEdit exposes copy(); we drive
+                // it programmatically from the Copy button so the
+                // visible error text stays where it is.
+                TextEdit {
+                    id: clipboardHelper
+                    visible: false
+                    width: 0
+                    height: 0
+                }
             }
 
             Label {
@@ -659,14 +714,24 @@ Item {
                 detailDialog.photoError = ""
                 detailDialog.photoLoading = false
 
-                // Fetch photo from Storage if we have a CID.
+                // Open the dialog FIRST, then defer the blocking
+                // fetchPhoto call through a single-shot timer so the
+                // dialog paints with its spinner before the QML thread
+                // blocks. Without the defer the dialog doesn't appear
+                // until fetchPhoto resolves (up to 60s for a timeout),
+                // and the user sees nothing happen on click — same
+                // pattern as the submit dispatcher in this file.
                 var cid = root.store.entries[i].storage_cid
                 if (cid && cid !== "") {
                     detailDialog.photoLoading = true
-                    _fetchPhoto(cid)
+                    detailDialog.pendingCid = cid
                 }
 
                 detailDialog.open()
+
+                if (cid && cid !== "") {
+                    fetchDispatcher.start()
+                }
                 return
             }
         }
