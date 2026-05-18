@@ -4,6 +4,7 @@
   "type": "ui_qml",
   "category": "app",
   "description": "Logos Witness UI: file picker, geohash-on-map selector, submit, map+timeline (Phase 2 skeleton)",
+  "main": "logos_witness_ui_qml_plugin",
   "view": "qml/Main.qml",
   "icon": "icon.png",
   "dependencies": ["logos_witness_core"],

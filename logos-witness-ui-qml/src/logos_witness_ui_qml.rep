@@ -1,0 +1,4 @@
+class LogosWitnessUiQml
+{
+    PROP(QString backendStatus="initializing" READONLY)
+}

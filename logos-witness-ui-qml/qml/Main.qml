@@ -50,6 +50,15 @@ Item {
     // Detail popup state. Set when the user clicks a marker or row.
     property var selectedRef: null
 
+    // Typed handle on the hybrid backend's C++ side. Reserved for task #27,
+    // which migrates `logos.callModule("logos_witness_core", ...)` call
+    // sites onto typed slots/properties declared in
+    // `src/logos_witness_ui_qml.rep`. Until then it's referenced only by
+    // task-#27 follow-up work; the previous diagnostic "Backend: ready"
+    // pill was removed (a missing C++ side is a packaging bug caught by
+    // CI's bundle-completeness gate, not a runtime user condition).
+    readonly property var backend: logos.module("logos_witness_ui_qml")
+
     // Live/Offline indicator for the Delivery feed. Refreshed every
     // `refreshTimer` tick (5s) plus on init via _probeDelivery. The core
     // exposes deliveryReady() as a sync invokable so the UI doesn't have

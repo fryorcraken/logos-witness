@@ -108,6 +108,33 @@ jobs:
           echo "Bundled QML: $bundled"
           diff <(echo "$tracked") <(echo "$bundled")
 
+      - name: Verify hybrid UI bundle contains the C++ backend .so
+        working-directory: logos-witness-ui-qml
+        run: |
+          set -eu
+          # `logos_witness_ui_qml` is a hybrid `ui_qml + C++ backend`
+          # module — the QML view and the native plugin ship in the
+          # same .lgx. If the build drops the .so (mkLogosQmlModule
+          # regression, metadata.json `main` field cleared by mistake,
+          # cross-compilation gap, …), runtime QML would silently
+          # fall back to the bridge-only path and any task-#27 typed-
+          # method migration would crash with "no backend". Catch the
+          # packaging gap here, not at the user's machine.
+          main_plugin=$(jq -r '.main // empty' metadata.json)
+          test -n "$main_plugin" || {
+            echo "::error::metadata.json missing 'main' field — hybrid UI requires it"
+            exit 1
+          }
+          expected="${main_plugin}.so"
+          found=$(tar tf result/*.lgx | grep -E "/${expected}\$" || true)
+          test -n "$found" || {
+            echo "::error::UI bundle missing C++ backend (expected file matching */${expected})"
+            echo "bundle contents:"
+            tar tf result/*.lgx
+            exit 1
+          }
+          echo "Found C++ backend in bundle: $found"
+
       - name: qmltest — UI helper unit tests (Phase 3.3+)
         working-directory: logos-witness-ui-qml
         run: |
