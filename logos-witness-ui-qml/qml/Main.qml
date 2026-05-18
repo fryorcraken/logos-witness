@@ -39,13 +39,21 @@ Item {
     property real storeMinTs: NaN
     property real storeMaxTs: NaN
 
-    // Phase 3.5 / SPEC §11: the visible time window, fed by TimeCursor's
-    // `windowChanged` signal. Both NaN before the cursor commits its first
-    // window (during initial layout); after that they are always finite.
-    property real winT0: NaN
-    property real winT1: NaN
-    property real winTm: NaN
-    property real winW:  NaN
+    // Phase 3.5 / SPEC §11: the visible time window. **Bound directly**
+    // to TimeCursor's t0/t1/tm/windowW properties — NOT mirrored via the
+    // windowChanged signal. The signal-mirror approach had a subtle
+    // staleness bug (windowChanged emitted with arg values captured
+    // before the cursor's own t0/t1 bindings finished re-evaluating, so
+    // the curve and the map/timeline filters could disagree after a
+    // store mutation reached the cursor first; SPEC §11.5 requires the
+    // three surfaces to stay strictly consistent). Property bindings
+    // settle through QML's dependency tracking in a defined order;
+    // signal args don't. NaN before the cursor commits its first
+    // window (during initial layout); finite after.
+    readonly property real winT0: isFinite(timeCursor.t0) ? timeCursor.t0 : NaN
+    readonly property real winT1: isFinite(timeCursor.t1) ? timeCursor.t1 : NaN
+    readonly property real winTm: isFinite(timeCursor.tm) ? timeCursor.tm : NaN
+    readonly property real winW:  isFinite(timeCursor.windowW) ? timeCursor.windowW : NaN
 
     // Detail popup state. Set when the user clicks a marker or row.
     property var selectedRef: null
@@ -388,16 +396,12 @@ Item {
             entryCount: root.entryCount
             storeMinTs: root.storeMinTs
             storeMaxTs: root.storeMaxTs
-            // Drag-friendly: only mutate window scalars here. The marker
-            // + timeline backing models are stable; their delegates bind
-            // opacity directly off winTm/winW so dragging just repaints
-            // existing items rather than rebuilding the whole list.
-            onWindowChanged: function (t0, t1) {
-                root.winT0 = t0
-                root.winT1 = t1
-                root.winTm = (t0 + t1) / 2
-                root.winW  = t1 - t0
-            }
+            // No onWindowChanged handler: root.winT0/winT1/winTm/winW are
+            // now bound directly to timeCursor.t0/t1/tm/windowW above.
+            // The `windowChanged` signal is retained in TimeCursor.qml
+            // for any future external listener that wants per-emission
+            // notifications (e.g. an analytics tap), but the binding
+            // path is the source of truth for the UI.
         }
     }
 
