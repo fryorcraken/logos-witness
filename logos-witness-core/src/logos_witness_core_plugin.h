@@ -41,10 +41,14 @@ public:
 
     Q_INVOKABLE void initLogos(LogosAPI* logosAPIInstance);
 
-    // Liveness probe for the UI's Delivery status badge. Returns the
-    // current value of `deliveryReady_`; not part of the locked
-    // interface (UI-only convenience).
+    // Liveness probes for the UI's status badges. Return the current
+    // values of `deliveryReady_` / `storageReady_`; not part of the
+    // locked interface (UI-only convenience). The UI shows them as
+    // two separate pills because they fail independently: delivery
+    // covers cross-instance ref broadcast (waku/libp2p), storage
+    // covers photo upload + fetch (storage_module + DHT).
     Q_INVOKABLE bool deliveryReady() const { return deliveryReady_; }
+    Q_INVOKABLE bool storageReady()  const { return storageReady_; }
 
 signals:
     void referenceObserved(const QByteArray& refBytes);

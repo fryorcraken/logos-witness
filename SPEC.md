@@ -180,8 +180,13 @@ into two groups:
   - `flushBatch() → {ok, error?, flushed?}`
   - `subscribeFeed() → void` (idempotent opt-in to the live feed; signals follow)
   - `deliveryReady() → bool` — synchronous probe of the live-feed
-    health, drives the UI's Live/Offline indicator. Cheap; called on
-    a ~5 s tick from the UI poll loop. See §2.2.
+    health, drives the UI's Delivery readiness pill. Cheap; called
+    on a ~5 s tick from the UI poll loop. See §2.2.
+  - `storageReady() → bool` — synchronous probe of the storage-module
+    init/start state, drives the UI's Storage readiness pill. Same
+    cadence + cost as `deliveryReady`. Independent of delivery —
+    upload + fetch depend on this; cross-instance ref broadcast
+    depends on `deliveryReady`. See §7 item 6.
 - **Wire-format decoders** (pure functions over wire-format bytes):
   - `decodeReference(QByteArray refBytes) → {ok, error?, schema_version?, content_hash?, timestamp?, geohash?}`
   - `decodeGeohash(QString geohash) → {ok, error?, latitude?, longitude?}`
@@ -276,9 +281,14 @@ Delivery directly.
 returns the current value of an internal `deliveryReady_` flag —
 true after the four lifecycle steps above complete successfully,
 false otherwise. The UI polls this every 5 s to drive the
-Live/Offline indicator. Polling instead of a push signal is a
-pragmatic shortcut from before the hybrid UI scaffold landed (see
-§5); task #27 may swap it for a typed signal subscription.
+**Delivery** readiness pill (see §7 item 6). A separate
+`storageReady()` invokable surfaces `storage_module` init/start
+state on the same cadence and drives the **Storage** readiness
+pill; the two pills are independent because the channels fail
+independently (peer ref broadcast vs. photo upload/fetch). Polling
+instead of a push signal is a pragmatic shortcut from before the
+hybrid UI scaffold landed (see §5); task #27 may swap it for a
+typed signal subscription.
 
 **Publish path.** After a successful `submitPhoto` upload, the core
 calls `delivery_publish(refBytes)`. The upstream `send()` internally
@@ -569,26 +579,49 @@ require an explicit SPEC amendment.
    not acceptable.
 6. **Respect basecamp's UI plugin sandbox.** Every UI plugin's QML engine
    is instantiated with a deny-all `QNetworkAccessManager` plus a
-   `RestrictedUrlInterceptor` that only allows `qrc:` and a small list of
-   filesystem roots. Consequences a UI contributor MUST design around:
-   - `Image.source = file://<user-picked-path>` is rejected; only paths
-     under basecamp's allowed roots resolve. The Photo tab is filename-only
-     in the submit dialog (no inline preview of the picked file).
-   - **Photo display after upload uses a base64 `data:image/jpeg;…` URL.**
-     `fetchPhoto(cid)` downloads the bytes via `storage_module` into the
-     core's per-process cache, then returns `{ok, data_url}` —
-     `data:image/jpeg;base64,<encoded bytes>`. The QML side sets
-     `Image.source = data_url` which the sandboxed engine accepts because
-     no network or file fetch is involved. Bandwidth cost is the base64
-     overhead (≈1.33× the JPEG) which is fine for v0 photo sizes.
-   - File reads of user-supplied paths happen in the core module, not in
-     the UI plugin. The UI hands a path string across the
-     `logos.callModule()` bridge; the core does the I/O.
+   `RestrictedUrlInterceptor` that only allows `qrc:` and `file://`
+   URLs rooted under the plugin's own runtime install dir
+   (`pluginPath` — the directory basecamp extracts the .lgx contents
+   into and points the QML engine's `baseUrl` at). Consequences a UI
+   contributor MUST design around:
+   - **`data:`, `image://<provider>/...`, `http(s)://`, and `file://`
+     outside `pluginPath` are all blanked by the interceptor.** An
+     `Image.source` set to any of these resolves to `QUrl()` and the
+     image silently fails to load — no QML error, no log line.
+   - **Photo display (Submit-dialog preview AND reference-detail
+     dialog) routes through the UI plugin's C++ backend.** The
+     backend reads the bytes (local file pick OR `storage_module`
+     download), copies them into a `preview-cache/` dir under
+     `pluginPath`, and returns a `file://` URL the interceptor
+     accepts. QML binds that URL into `Image.source` as a plain
+     local file. Cache key is content-addressed (SHA-256 prefix for
+     picks, CID for storage); LRU-bounded at 1 GB.
+   - **File reads of user-supplied paths happen in the C++ backend**
+     (ui-host process), not in QML — QML has no FS affordance and
+     wouldn't pass the interceptor anyway. The UI plugin's
+     `loadLocalPhotoUrl(QString filePath)` SLOT is the entrypoint.
+   - **Every `logos.callModule()` from QML is synchronous and blocks
+     the render thread.** Per CLAUDE.md, all blocking core RPCs MUST
+     be owned by the UI plugin's C++ backend (which marshals through
+     a single thread because the upstream `LogosAPIClient` isn't
+     reentrant) and surfaced to QML via auto-syncing `PROP`s or
+     fire-and-forget `SLOT`/`SIGNAL` pairs. QtRO `SLOT` returns are
+     wrapped with `logos.watch(...)` on the QML side because they're
+     async.
    - QML imports basecamp does not bundle (e.g., `QtLocation`,
      `QtPositioning`) are vendored into the plugin's view directory and
      must be ABI-matched to basecamp's `qtdeclarative`. The refresh
      procedure lives in the README; the source rev lives in the
      `SOURCE.md` next to each vendored import.
+   - **Capability readiness is two surfaces, not one.** The UI shows
+     a **Delivery** pill (driven by `core.deliveryReady()`) AND a
+     **Storage** pill (driven by `core.storageReady()`) side-by-side
+     in the timeline header. They fail independently: a peer ref can
+     arrive over delivery while storage is down (no photo
+     retrievable), and a submit can upload to storage while delivery
+     is offline (no peer will see it). Surfacing them as one
+     "Online/Offline" badge is forbidden by this rule because it
+     hides which capability is degraded from the user.
 
 ### Ask first
 

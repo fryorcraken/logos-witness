@@ -21,8 +21,19 @@ class LogosWitnessUiQml
     PROP(QVariantList refs READONLY)
 
     // Auto-syncing delivery-feed reachability. Backend refreshes off
-    // a 5 s QTimer plus on every observed reference.
+    // a 5 s QTimer plus on every observed reference. Surfaces the
+    // cross-instance ref broadcast channel (waku/libp2p — covers
+    // `submitPhoto` broadcast and inbound peer refs).
     PROP(bool deliveryReady=false READONLY)
+
+    // Auto-syncing storage-module reachability. Same 5 s cadence.
+    // Surfaces the photo upload + fetch channel (storage_module +
+    // DHT). Independent of deliveryReady: a ref can be broadcast
+    // without storage (the bytes just won't be retrievable), and
+    // storage can be up without delivery (uploads work, peers
+    // won't see them). The UI shows two pills so the user knows
+    // which capability is degraded.
+    PROP(bool storageReady=false READONLY)
 
     // Backend lifecycle marker. "initializing" → "ready" once
     // initLogos has wired the LogosAPI client; QML can use this to
@@ -54,8 +65,14 @@ class LogosWitnessUiQml
     // matches core's submitPhoto.delivery_ok soft-warning shape.
     SIGNAL(submitDone(QString localId, QString contentHash, QString storageCid, bool ok, bool deliveryOk, QString error))
 
-    // Photo fetch outcome.
-    SIGNAL(photoReady(QString cid, QByteArray bytes))
+    // Photo fetch outcome. `url` is a file:// URL rooted under the
+    // UI plugin's runtime install dir — the only filesystem root
+    // basecamp's RestrictedUrlInterceptor accepts for `file://`,
+    // and therefore the only channel by which QML's Image element
+    // can render JPEG bytes that arrived at runtime. Bytes are
+    // cached by CID; subsequent fetches for the same CID hit the
+    // existing file without re-downloading.
+    SIGNAL(photoReady(QString cid, QString url))
     SIGNAL(photoFailed(QString cid, QString error))
 
     // Local file → renderable URL. Used by Submit-dialog preview. The

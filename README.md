@@ -34,8 +34,12 @@ What you see on screen:
   peers have submitted.
 - A timeline panel on the right listing the same references with
   time, location, and a short CID.
-- A **Live** / **Offline** pill at the top of the timeline showing
-  whether the app is receiving broadcasts from other instances.
+- **Delivery** and **Storage** readiness pills at the top of the
+  timeline. Delivery green = receiving cross-instance ref broadcasts
+  (peer photos will appear). Storage green = photo upload + fetch
+  available (your submits will land, peer photos will render). The
+  two are independent — a peer ref can arrive while photos are
+  unfetchable, or your submit can land without any peer seeing it.
 - An upload progress strip while a submission is in flight, with
   Retry if it fails and a "saved locally — not broadcast" warning
   if the upload completed but couldn't reach the network.
@@ -375,7 +379,7 @@ logos-witness/
     ├── icon.svg               # sidebar icon (source)
     ├── icon.png               # sidebar icon (128×128, shipped in the .lgx)
     ├── qml/                   # bundled as the view directory
-    │   ├── Main.qml           # map + timeline + cursor + upload banner + Live pill
+    │   ├── Main.qml           # map + timeline + cursor + upload banner + Delivery/Storage pills
     │   ├── SubmitDialog.qml   # photo + map + when + submit
     │   ├── MapView.qml        # OSM map, click → geohash-8 pin / display markers
     │   ├── TimeCursor.qml     # SPEC §11 centered-playhead time cursor

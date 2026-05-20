@@ -80,8 +80,16 @@ Item {
     // Detail popup state.
     property var selectedRef: null
 
-    // Live/Offline indicator — bound straight to the backend PROP.
+    // Capability readiness indicators — bound straight to the backend
+    // PROPs. Delivery covers the cross-instance ref broadcast channel
+    // (waku/libp2p); Storage covers the photo upload+fetch channel
+    // (storage_module + DHT). The UI shows them as two pills because
+    // they fail independently: a peer ref can arrive over delivery
+    // while storage is down (no photo retrievable), or a submit can
+    // upload to storage while delivery is offline (no peer will see
+    // it). SPEC §7.4.
     readonly property bool deliveryReady: backend ? backend.deliveryReady : false
+    readonly property bool storageReady:  backend ? backend.storageReady  : false
 
     // ---------------------------------------------------------------
     // Backend signal wiring
@@ -99,12 +107,12 @@ Item {
             root._onSubmitDone(localId, contentHash, storageCid,
                                ok, deliveryOk, error)
         }
-        function onPhotoReady(cid, bytes) {
-            // Phase 1: we do not yet display bytes — upstream basecamp
-            // issue #189 tracks the bytes-to-Image channel. Stash so
-            // we can wire the display side in Phase 2 without
-            // re-plumbing the fetch flow.
-            detailDialog._onPhotoReady(cid, bytes)
+        // Backend has materialised the photo at a file:// URL under
+        // its runtime install dir (the only filesystem root QML's
+        // RestrictedUrlInterceptor accepts). QML binds the URL into
+        // Image.source like any other local file.
+        function onPhotoReady(cid, url) {
+            detailDialog._onPhotoReady(cid, url)
         }
         function onPhotoFailed(cid, errorStr) {
             detailDialog._onPhotoFailed(cid, errorStr)
@@ -223,7 +231,12 @@ Item {
                     font.bold: true
                     Layout.fillWidth: true
                 }
-                // Live/Offline pill — backend.deliveryReady PROP.
+                // Delivery + Storage readiness pills. Each is bound
+                // to a separate backend PROP so the user can tell
+                // which capability is degraded at a glance — submit
+                // succeeds with only Storage up (peers won't see it
+                // until Delivery returns); browse succeeds with only
+                // Delivery up (refs land but photos won't fetch).
                 Rectangle {
                     Layout.preferredHeight: 16
                     implicitWidth: deliveryPill.implicitWidth + 12
@@ -234,9 +247,24 @@ Item {
                     Label {
                         id: deliveryPill
                         anchors.centerIn: parent
-                        text: root.deliveryReady ? "● Live" : "● Offline"
+                        text: (root.deliveryReady ? "● " : "● ") + "Delivery"
                         font.pixelSize: 10
                         color: root.deliveryReady ? "#1e7a3c" : "#a13226"
+                    }
+                }
+                Rectangle {
+                    Layout.preferredHeight: 16
+                    implicitWidth: storagePill.implicitWidth + 12
+                    radius: 8
+                    color: root.storageReady ? "#e7f7ec" : "#fbeaea"
+                    border.color: root.storageReady ? "#2ecc71" : "#c0392b"
+                    border.width: 1
+                    Label {
+                        id: storagePill
+                        anchors.centerIn: parent
+                        text: (root.storageReady ? "● " : "● ") + "Storage"
+                        font.pixelSize: 10
+                        color: root.storageReady ? "#1e7a3c" : "#a13226"
                     }
                 }
                 Label {
@@ -411,15 +439,16 @@ Item {
         property string photoCid: ""
         property bool   photoLoading: false
         property string photoError: ""
-        // Phase 2: rendering. For now we just count bytes so the dev
-        // loop can confirm the fetch worked end-to-end.
-        property int    photoByteCount: 0
+        // file:// URL the backend writes under the plugin's runtime
+        // install dir — the only filesystem root QML's interceptor
+        // accepts. Empty until photoReady arrives.
+        property string photoUrl: ""
 
-        function _onPhotoReady(cid, bytes) {
+        function _onPhotoReady(cid, url) {
             if (cid !== detailDialog.photoCid) return
             detailDialog.photoLoading = false
             detailDialog.photoError = ""
-            detailDialog.photoByteCount = bytes.length
+            detailDialog.photoUrl = url
         }
         function _onPhotoFailed(cid, errorStr) {
             if (cid !== detailDialog.photoCid) return
@@ -463,31 +492,41 @@ Item {
                 Layout.fillWidth: true
             }
 
-            // Photo preview area. Phase 1 surfaces fetch progress +
-            // raw byte count only; rendering lands in Phase 2 once
-            // the bytes-to-Image channel is settled (upstream #189).
-            Item {
+            // Photo preview area. backend.fetchPhotoAsync downloads
+            // the bytes via storage_module, materialises them as a
+            // file:// URL under the plugin's runtime install dir
+            // (the only file root the QML interceptor accepts), and
+            // emits photoReady(cid, url). Same channel as the Submit
+            // preview — see docs/photo-display-investigation.md.
+            Frame {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                Layout.minimumHeight: 200
+                Layout.minimumHeight: 240
+                padding: 4
                 visible: detailDialog.photoLoading
-                         || detailDialog.photoByteCount > 0
-
-                BusyIndicator {
-                    anchors.centerIn: parent
-                    running: detailDialog.photoLoading
-                    visible: detailDialog.photoLoading
+                         || detailDialog.photoUrl !== ""
+                background: Rectangle {
+                    color: "#f4f4f4"
+                    border.color: "#ddd"
+                    border.width: 1
+                    radius: 4
                 }
-
-                Label {
-                    anchors.centerIn: parent
-                    visible: !detailDialog.photoLoading
-                             && detailDialog.photoByteCount > 0
-                    text: "Photo fetched: "
-                          + detailDialog.photoByteCount + " bytes"
-                          + "\n(rendering pending upstream #189)"
-                    color: "#555"
-                    horizontalAlignment: Text.AlignHCenter
+                Item {
+                    anchors.fill: parent
+                    Image {
+                        anchors.fill: parent
+                        anchors.margins: 4
+                        fillMode: Image.PreserveAspectFit
+                        asynchronous: true
+                        cache: false
+                        source: detailDialog.photoUrl
+                        visible: detailDialog.photoUrl !== ""
+                    }
+                    BusyIndicator {
+                        anchors.centerIn: parent
+                        running: detailDialog.photoLoading
+                        visible: detailDialog.photoLoading
+                    }
                 }
             }
 
@@ -528,7 +567,7 @@ Item {
                 color: "#888"
                 font.pixelSize: 11
                 visible: !detailDialog.photoLoading
-                         && detailDialog.photoByteCount === 0
+                         && detailDialog.photoUrl === ""
                          && detailDialog.photoError === ""
                 text: root.selectedRef && root.selectedRef.storage_cid
                       ? "Photo unavailable."
@@ -746,7 +785,7 @@ Item {
                 detailDialog.photoCid = ""
                 detailDialog.photoError = ""
                 detailDialog.photoLoading = false
-                detailDialog.photoByteCount = 0
+                detailDialog.photoUrl = ""
 
                 var cid = root.effectiveRefs[i].storage_cid
                 if (cid && cid !== "" && backend) {

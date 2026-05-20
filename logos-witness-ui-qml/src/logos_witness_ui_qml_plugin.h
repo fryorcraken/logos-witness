@@ -68,8 +68,20 @@ private:
     // the backend thread via QueuedConnection.
     void _emitSubmitDone(QString localId, QString contentHash, QString storageCid,
                          bool ok, bool deliveryOk, QString error);
-    void _emitPhotoReady(QString cid, QByteArray bytes);
+    void _emitPhotoReady(QString cid, QString url);
     void _emitPhotoFailed(QString cid, QString error);
+
+    // Write `bytes` into the plugin's preview-cache/ dir under the
+    // given key (callers pick: SHA-256 prefix for local picks, CID
+    // for storage fetches), with the given file suffix (sans dot),
+    // and return a `file://` URL the QML engine's interceptor will
+    // accept. On any I/O failure returns a string starting with
+    // "error:" — callers branch on that prefix. Safe to call from
+    // worker threads (only touches filesystem; no SDK state).
+
+    QString _cacheBytesUnderPluginDir(const QByteArray& bytes,
+                                       const QString& key,
+                                       const QString& suffix);
 
     // Marshal an `m_coreClient->invokeRemoteMethod` call onto the
     // backend thread and block the caller until it returns. The

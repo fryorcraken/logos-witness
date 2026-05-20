@@ -155,6 +155,8 @@ void LogosWitnessUiQmlPlugin::_refreshFromCore()
         QStringLiteral("listInscriptions"), QVariantList{})));
     setDeliveryReady(_invokeCoreSync(
         QStringLiteral("deliveryReady"), QVariantList{}).toBool());
+    setStorageReady(_invokeCoreSync(
+        QStringLiteral("storageReady"), QVariantList{}).toBool());
 }
 
 QVariantMap LogosWitnessUiQmlPlugin::decodeGeohash(QString geohash)
@@ -239,9 +241,11 @@ void LogosWitnessUiQmlPlugin::fetchPhotoAsync(QString cid)
             return;
         }
         // Core currently returns a base64 data URL string; strip the
-        // header and decode to raw bytes for the QtRO QByteArray
-        // payload. Once core exposes a `data_bytes` field we can
-        // switch to that and drop the decode round-trip.
+        // header and decode to raw bytes, then materialise as a
+        // file:// URL under the plugin's runtime install dir (the
+        // only filesystem root QML's interceptor allows). Once core
+        // exposes a `data_bytes` field we can drop the base64
+        // round-trip — the URL channel stays as-is.
         const QString dataUrl = m.value("data_url").toString();
         const int comma = dataUrl.indexOf(QLatin1Char(','));
         if (comma < 0) {
@@ -254,7 +258,16 @@ void LogosWitnessUiQmlPlugin::fetchPhotoAsync(QString cid)
             _emitPhotoFailed(cid, QStringLiteral("fetchPhoto: empty bytes after base64 decode"));
             return;
         }
-        _emitPhotoReady(cid, bytes);
+        // Storage CIDs are content-addressed already; use the CID as
+        // the cache key (no SHA-256 of bytes needed). JPEG suffix —
+        // SPEC §7 standardises on JPEG for the photo payload.
+        const QString url = _cacheBytesUnderPluginDir(
+            bytes, cid, QStringLiteral("jpg"));
+        if (url.startsWith(QStringLiteral("error:"))) {
+            _emitPhotoFailed(cid, url.mid(QStringLiteral("error:").size()));
+            return;
+        }
+        _emitPhotoReady(cid, url);
     }));
 }
 
@@ -271,10 +284,10 @@ void LogosWitnessUiQmlPlugin::_emitSubmitDone(QString localId,
     }, Qt::QueuedConnection);
 }
 
-void LogosWitnessUiQmlPlugin::_emitPhotoReady(QString cid, QByteArray bytes)
+void LogosWitnessUiQmlPlugin::_emitPhotoReady(QString cid, QString url)
 {
     QMetaObject::invokeMethod(this, [=]() {
-        emit photoReady(cid, bytes);
+        emit photoReady(cid, url);
     }, Qt::QueuedConnection);
 }
 
@@ -390,14 +403,23 @@ QString LogosWitnessUiQmlPlugin::loadLocalPhotoUrl(QString filePath)
         return QStringLiteral("error:file is empty: ") + path;
     }
 
-    // Cache key off the bytes — picking the same photo twice hits the
-    // existing file instead of rewriting it. Suffix matches the
-    // input where possible (preserves QML's image-format autodetect).
-    const QByteArray digest = QCryptographicHash::hash(
-        bytes, QCryptographicHash::Sha256).toHex().left(16);
+    // Cache key off the bytes (SHA-256 prefix) so picking the same
+    // photo twice hits the existing file. Suffix matches the input
+    // where possible (preserves QML's image-format autodetect).
+    const QString key = QString::fromLatin1(QCryptographicHash::hash(
+        bytes, QCryptographicHash::Sha256).toHex().left(16));
     QString suffix = QFileInfo(path).suffix().toLower();
     if (suffix.isEmpty()) suffix = QStringLiteral("jpg");
+    return _cacheBytesUnderPluginDir(bytes, key, suffix);
+}
 
+// Materialise `bytes` as a file under the plugin's runtime install
+// dir and return a `file://` URL the QML engine accepts. Shared
+// between loadLocalPhotoUrl (Submit preview, key = SHA-256 prefix of
+// bytes) and fetchPhotoAsync (storage fetch, key = CID).
+QString LogosWitnessUiQmlPlugin::_cacheBytesUnderPluginDir(
+    const QByteArray& bytes, const QString& key, const QString& suffix)
+{
     static const void* anchor =
         reinterpret_cast<const void*>(&LogosWitnessUiQmlPlugin::loadLocalPhotoUrl);
     const QString dir = pluginInstallDir(anchor);
@@ -409,7 +431,7 @@ QString LogosWitnessUiQmlPlugin::loadLocalPhotoUrl(QString filePath)
     if (!QDir().mkpath(cacheDir)) {
         return QStringLiteral("error:could not create preview cache: ") + cacheDir;
     }
-    const QString outPath = cacheDir + QStringLiteral("/") + digest
+    const QString outPath = cacheDir + QStringLiteral("/") + key
                           + QStringLiteral(".") + suffix;
     if (!QFileInfo::exists(outPath)) {
         QFile out(outPath);
