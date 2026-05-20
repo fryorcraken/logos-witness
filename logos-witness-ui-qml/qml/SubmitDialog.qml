@@ -25,12 +25,29 @@ Dialog {
     width: 760
     height: 640
 
+    // C++ backend (the UI plugin's hybrid side). Used here only to
+    // materialise a local preview URL — basecamp's
+    // RestrictedUrlInterceptor blocks every URL scheme except qrc and
+    // file-under-pluginPath, so the backend has to copy the picked
+    // file into its own runtime install dir and hand QML a file://
+    // URL rooted there. Owner injects this; left null in tests.
+    property var backend: null
+
     property url    selectedFile: ""
     property string pinGeohash: ""
     property real   pinLatitude: 0.0
     property real   pinLongitude: 0.0
     property bool   hasPin: false
     property var    capturedAt: new Date()
+
+    // Preview state. Set by the file-pick handler via the backend;
+    // `previewError` populates whenever the backend can't materialise
+    // a file:// URL (file missing, unreadable, cache-write fail, …).
+    // The error text is selectable + copyable per the no-silent-
+    // fallback rule — when storage is offline the user needs the
+    // literal error to paste into bug reports.
+    property string previewUrl: ""
+    property string previewError: ""
 
     // When-tab validation. `dateTimeError` is non-empty iff the date or
     // time field's *current* text doesn't parse cleanly. Visible on the
@@ -80,11 +97,15 @@ Dialog {
             currentIndex: tabs.currentIndex
 
             // ---- Photo tab ----
-            // No inline preview: basecamp installs a DenyAll network access
-            // manager on UI-plugin QML engines, so Qt rejects `file://` (and
-            // even plain local paths) in Image.source. We show filename only;
-            // the picked path is read by the core module on submit, where
-            // filesystem access is unrestricted.
+            // Inline preview is wired through the hybrid backend's
+            // loadLocalPhotoUrl SLOT: the backend reads the picked
+            // file and materialises a copy under its own runtime
+            // install dir (the only `file://` root basecamp's
+            // RestrictedUrlInterceptor allows for UI-plugin QML),
+            // then hands back a file:// URL we can bind directly.
+            // Errors come back via the `error:` prefix and surface
+            // in a selectable + copyable TextEdit so users can paste
+            // them into bug reports without retyping.
             ColumnLayout {
                 spacing: 12
                 Layout.alignment: Qt.AlignTop
@@ -116,7 +137,80 @@ Dialog {
                     }
                 }
 
-                Item { Layout.fillHeight: true }
+                // Preview area. Frame so the photo has a visible
+                // bound even before bytes arrive; min-height so a
+                // tall portrait JPEG doesn't push the rest of the
+                // dialog off-screen.
+                Frame {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.minimumHeight: 240
+                    padding: 4
+                    background: Rectangle {
+                        color: "#f4f4f4"
+                        border.color: "#ddd"
+                        border.width: 1
+                        radius: 4
+                    }
+
+                    Item {
+                        anchors.fill: parent
+
+                        Image {
+                            anchors.fill: parent
+                            anchors.margins: 4
+                            fillMode: Image.PreserveAspectFit
+                            asynchronous: true
+                            cache: false
+                            source: submitDialog.previewUrl
+                            visible: submitDialog.previewUrl !== ""
+                                     && submitDialog.previewError === ""
+                        }
+
+                        Label {
+                            anchors.centerIn: parent
+                            visible: submitDialog.selectedFile == ""
+                                     && submitDialog.previewError === ""
+                            text: "Preview will appear here once you pick a photo."
+                            color: "#888"
+                            font.pixelSize: 11
+                        }
+                    }
+                }
+
+                // Error surface. Same selectable + copyable pattern
+                // used by the detail dialog (fetchPhoto errors).
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: submitDialog.previewError !== ""
+                    spacing: 6
+                    TextEdit {
+                        Layout.fillWidth: true
+                        readOnly: true
+                        selectByMouse: true
+                        selectByKeyboard: true
+                        wrapMode: TextEdit.Wrap
+                        color: "#c0392b"
+                        font.pixelSize: 11
+                        text: "Preview error: " + submitDialog.previewError
+                    }
+                    Button {
+                        text: "Copy"
+                        flat: true
+                        onClicked: {
+                            previewClipboardHelper.text =
+                                "Preview error: " + submitDialog.previewError
+                            previewClipboardHelper.selectAll()
+                            previewClipboardHelper.copy()
+                        }
+                    }
+                    TextEdit {
+                        id: previewClipboardHelper
+                        visible: false
+                        width: 0
+                        height: 0
+                    }
+                }
             }
 
             // ---- Location tab ----
@@ -247,7 +341,36 @@ Dialog {
         id: fileDialog
         title: "Pick a photo"
         nameFilters: ["JPEG images (*.jpg *.jpeg)", "All files (*)"]
-        onAccepted: submitDialog.selectedFile = fileDialog.selectedFile
+        onAccepted: {
+            submitDialog.selectedFile = fileDialog.selectedFile
+            submitDialog._refreshPreview()
+        }
+    }
+
+    // Ask the backend to materialise a renderable URL for the picked
+    // file. The SLOT returns synchronously (local file copy, no
+    // network) so we don't need logos.watch. Failures arrive with
+    // an `error:` prefix; QML splits the channel into previewUrl vs
+    // previewError so the UI can show one OR the other, never both.
+    function _refreshPreview() {
+        submitDialog.previewUrl = ""
+        submitDialog.previewError = ""
+        if (!submitDialog.backend) {
+            submitDialog.previewError =
+                "Backend not ready — cannot render preview"
+            return
+        }
+        if (submitDialog.selectedFile == "") return
+        var raw = submitDialog.backend.loadLocalPhotoUrl(
+            submitDialog.selectedFile.toString())
+        if (typeof raw === "string" && raw.indexOf("error:") === 0) {
+            submitDialog.previewError = raw.substring("error:".length)
+        } else if (typeof raw === "string" && raw !== "") {
+            submitDialog.previewUrl = raw
+        } else {
+            submitDialog.previewError =
+                "Backend returned no URL (got: " + JSON.stringify(raw) + ")"
+        }
     }
 
     // Parse the When-tab fields. On success: capturedAt is updated and
@@ -297,6 +420,8 @@ Dialog {
         lastError = ""
         dateTimeError = ""
         submitting = false
+        previewUrl = ""
+        previewError = ""
         _seedDateTimeFields(now)
     }
 

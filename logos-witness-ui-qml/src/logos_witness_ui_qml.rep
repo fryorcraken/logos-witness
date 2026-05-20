@@ -1,4 +1,70 @@
+// QtRO source schema for the UI plugin's C++ backend.
+//
+// QML reaches this via `logos.module("logos_witness_ui_qml")`, then:
+//   - reads PROPs as auto-syncing properties: `backend.refs`,
+//     `backend.deliveryReady`, etc.
+//   - invokes SLOTs and wraps the reply with `logos.watch(...)` for
+//     promise-style result/error.
+//   - listens to SIGNALs with the usual `onFooBar:` handler shape.
+//
+// Async pattern (submit, fetch): caller fires the SLOT, the backend
+// runs the blocking core call on a worker thread, then emits a paired
+// completion SIGNAL. This means no `logos.callModule(...)` call on the
+// QML render thread.
 class LogosWitnessUiQml
 {
+    // Auto-syncing snapshot of the timeline. Each entry is a
+    // QVariantMap with the same shape as core's listInscriptions:
+    //   { content_hash, timestamp, geohash, storage_cid, pending? }
+    // The optional `pending` flag is added by the backend for
+    // optimistic local inserts that haven't completed upload yet.
+    PROP(QVariantList refs READONLY)
+
+    // Auto-syncing delivery-feed reachability. Backend refreshes off
+    // a 5 s QTimer plus on every observed reference.
+    PROP(bool deliveryReady=false READONLY)
+
+    // Backend lifecycle marker. "initializing" → "ready" once
+    // initLogos has wired the LogosAPI client; QML can use this to
+    // delay any backend-dependent UI until the replica is live.
     PROP(QString backendStatus="initializing" READONLY)
+
+    // Fire-and-forget submit. Backend posts onto QThreadPool, calls
+    // core's submitPhoto (blocking — strip → storage upload → delivery
+    // publish), then emits submitDone on the QtRO thread.
+    // localId is an opaque echo (anything the caller picks) so QML
+    // can match completion to the optimistic row it inserted.
+    SLOT(void submitPhotoAsync(QString localId, QString filePath, QString timestamp, QString geohash))
+
+    // Fire-and-forget photo fetch. Same shape; bytes come back via
+    // photoReady or photoFailed.
+    SLOT(void fetchPhotoAsync(QString cid))
+
+    // Lightweight typed accessor for a frequently-called sync op:
+    // decode a geohash to (lat, lon). Returns a QVariantMap
+    //   { ok: bool, latitude?: double, longitude?: double, error?: string }
+    // matching core's contract. Backend calls core synchronously
+    // because this is cheap (no I/O) and the result is memoizable
+    // on the QML side.
+    SLOT(QVariantMap decodeGeohash(QString geohash))
+
+    // Submit completion. `ok` reflects the storage-upload outcome;
+    // `deliveryOk` is set false (with `error` populated) when the
+    // upload succeeded locally but the delivery broadcast didn't —
+    // matches core's submitPhoto.delivery_ok soft-warning shape.
+    SIGNAL(submitDone(QString localId, QString contentHash, QString storageCid, bool ok, bool deliveryOk, QString error))
+
+    // Photo fetch outcome.
+    SIGNAL(photoReady(QString cid, QByteArray bytes))
+    SIGNAL(photoFailed(QString cid, QString error))
+
+    // Local file → renderable URL. Used by Submit-dialog preview. The
+    // backend reads the file (full filesystem access in the ui-host
+    // process), copies the bytes to a cache file under the plugin's
+    // runtime install dir — the only filesystem root basecamp's
+    // RestrictedUrlInterceptor allows for `file://` — and returns
+    // that URL. On any failure the returned string starts with
+    // "error:" followed by the message; QML branches on that prefix.
+    // Synchronous: cheap (local file copy, no network).
+    SLOT(QString loadLocalPhotoUrl(QString filePath))
 }

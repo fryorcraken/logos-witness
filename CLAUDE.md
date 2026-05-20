@@ -41,6 +41,31 @@ to discover a red main on their own.
   shared refs, branch deletes, hook bypasses) still require explicit
   per-action authorization.
 
+## Never block the QML thread on `logos.callModule`
+
+The basecamp `LogosQmlBridge` exposes only a **synchronous**
+`callModule(module, method, args)` — every call blocks the QML thread
+until the remote module replies. On a cold launch the remote module
+may not yet have been spawned by basecamp, so the first call can
+block for tens of seconds. Even on a warm system, storage downloads
+and waku publishes routinely take a second or more.
+
+Rule: **no `logos.callModule(...)` may run on the QML render path**,
+i.e. never from `Component.onCompleted`, `onClicked`, property
+bindings, or anywhere else that holds up paint.
+
+Pattern (already in `Main.qml`): defer the blocking call onto a
+single-shot `Timer { interval: 40 }`. The 40 ms is empirical —
+`Qt.callLater` and a 0-interval Timer both fire before the next
+paint flushes under basecamp's Qt6 build, defeating the point. Open
+the dialog / paint the banner first, then `dispatcher.start()`.
+
+If you find yourself adding a sync `callModule` to a startup or
+click handler, **stop**, wrap it in a `Timer` dispatcher with a
+clear `id`-style name (`uploadDispatcher`, `startupDispatcher`,
+`fetchDispatcher` — match the existing ones), and add a comment
+explaining what would freeze without it.
+
 ## Hand-off to a new agent
 
 When the user opens a fresh session ("resume the work"), an agent should
