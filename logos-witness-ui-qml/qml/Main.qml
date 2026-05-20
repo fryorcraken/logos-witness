@@ -662,27 +662,43 @@ Item {
         root.markers = newMarkers
     }
 
-    // Memoized — same geohash always decodes to the same centroid.
-    // Without the cache, _rebuildBindings would re-RPC every ref on
-    // every refs PROP update.
+    // Per-geohash centroid cache. Same geohash always decodes to the
+    // same centroid, so we cache aggressively — but the backend.
+    // decodeGeohash call is async over QtRO (no sync path from QML),
+    // so cache misses arrive on a callback and we trigger a fresh
+    // _rebuildBindings tick to re-walk the refs with the new entry
+    // populated. `undefined` = not yet asked; `null` = asked and the
+    // decode failed; object = asked and succeeded.
     property var _centroidCache: ({})
+
     function _decodeGeohashCentroid(geohash) {
         if (!geohash) return null
         var cached = root._centroidCache[geohash]
         if (cached !== undefined) return cached
         if (!backend) return null
-        // backend.decodeGeohash is synchronous on the backend thread;
-        // it's a math-only call (no I/O), but it does cross the QtRO
-        // boundary. Cache aggressively — the typical call site
-        // (_rebuildBindings) walks every ref on every refs update.
-        var raw = backend.decodeGeohash(geohash)
-        if (!raw || raw.ok !== true) {
-            root._centroidCache[geohash] = null
-            return null
-        }
-        var c = { latitude: raw.latitude, longitude: raw.longitude }
-        root._centroidCache[geohash] = c
-        return c
+        // Mark as "in flight" so we don't fire concurrent watches for
+        // the same geohash. JS lookup will see this as a truthy
+        // object and skip the rebuild path on the next walk; once
+        // the watch resolves we overwrite with the real result.
+        root._centroidCache[geohash] = { _pending: true }
+        var pending = backend.decodeGeohash(geohash)
+        logos.watch(pending,
+            function (raw) {
+                if (!raw || raw.ok !== true) {
+                    root._centroidCache[geohash] = null
+                } else {
+                    root._centroidCache[geohash] =
+                        { latitude: raw.latitude, longitude: raw.longitude }
+                }
+                root._rebuildBindings()
+            },
+            function (err) {
+                console.warn("decodeGeohash failed for", geohash, ":", err)
+                root._centroidCache[geohash] = null
+                root._rebuildBindings()
+            })
+        return null  // initial walk: marker will appear after the
+                    // async resolve + rebuild
     }
 
     function _showDetailFor(contentHash) {

@@ -348,10 +348,15 @@ Dialog {
     }
 
     // Ask the backend to materialise a renderable URL for the picked
-    // file. The SLOT returns synchronously (local file copy, no
-    // network) so we don't need logos.watch. Failures arrive with
-    // an `error:` prefix; QML splits the channel into previewUrl vs
-    // previewError so the UI can show one OR the other, never both.
+    // file. QtRO SLOTs return a pending-call from QML — calling the
+    // method directly gives back an empty default before the round-
+    // trip completes. logos.watch(...) wraps it as a JS promise; the
+    // success callback fires with the real return value, the error
+    // callback fires if the call itself failed (transport error,
+    // timeout). The backend uses an `error:`-prefixed string for
+    // app-level failures (file unreadable, write failed, …) which
+    // arrive in the success path; we split the channel into
+    // previewUrl vs previewError so the UI shows one OR the other.
     function _refreshPreview() {
         submitDialog.previewUrl = ""
         submitDialog.previewError = ""
@@ -361,16 +366,24 @@ Dialog {
             return
         }
         if (submitDialog.selectedFile == "") return
-        var raw = submitDialog.backend.loadLocalPhotoUrl(
+        var pending = submitDialog.backend.loadLocalPhotoUrl(
             submitDialog.selectedFile.toString())
-        if (typeof raw === "string" && raw.indexOf("error:") === 0) {
-            submitDialog.previewError = raw.substring("error:".length)
-        } else if (typeof raw === "string" && raw !== "") {
-            submitDialog.previewUrl = raw
-        } else {
-            submitDialog.previewError =
-                "Backend returned no URL (got: " + JSON.stringify(raw) + ")"
-        }
+        logos.watch(pending,
+            function (value) {
+                var raw = String(value)
+                if (raw.indexOf("error:") === 0) {
+                    submitDialog.previewError = raw.substring("error:".length)
+                } else if (raw !== "") {
+                    submitDialog.previewUrl = raw
+                } else {
+                    submitDialog.previewError =
+                        "Backend returned an empty URL"
+                }
+            },
+            function (err) {
+                submitDialog.previewError =
+                    "loadLocalPhotoUrl failed: " + String(err)
+            })
     }
 
     // Parse the When-tab fields. On success: capturedAt is updated and

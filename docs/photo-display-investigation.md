@@ -136,7 +136,8 @@ materialises something the interceptor accepts.
 
 ### Attempt 4 — `file://` under the plugin's runtime install dir
 
-**Status:** 🟡 in progress; current bug.
+**Status:** ✅ working end-to-end (Submit-dialog preview, dogfooded
+2026-05-20).
 
 The interceptor explicitly whitelists `file://` under `pluginPath`.
 That dir is **writable** (verified by `touch __writable_probe__`) —
@@ -153,20 +154,14 @@ Caches by SHA-256 prefix → picking the same photo twice is a free hit.
 Backend implementation in `logos_witness_ui_qml_plugin.cpp` (current
 commit). UI in `SubmitDialog.qml`'s Photo tab.
 
-**Current bug (2026-05-20):** preview shows
+**First bug (2026-05-20, fixed):** preview showed
 `Preview error: Backend returned no URL (got: "")`.
 
-The empty string is the diagnostic clue. The backend's
-`loadLocalPhotoUrl` has no return path that produces `""` — every
-branch returns either a `"file://..."` URL or a `"error:..."` string.
-The empty string must come from the QtRO replica path.
-
-Root cause (hypothesis, confirmed by the
-[tutorial](https://github.com/logos-co/logos-tutorial/blob/master/tutorial-cpp-ui-app.md#step-6-qml-view)):
-**QtRO SLOT calls from QML are not synchronous.** A replica call
-returns a `QRemoteObjectPendingCall` immediately; the actual result
-arrives later via signal. The tutorial wraps every backend-method
-call with `logos.watch(...)`:
+Root cause: **QtRO SLOT calls from QML are not synchronous.** A
+replica call returns a `QRemoteObjectPendingCall` immediately; the
+actual result arrives later via signal. Per the
+[calc UI tutorial](https://github.com/logos-co/logos-tutorial/blob/master/tutorial-cpp-ui-app.md#step-6-qml-view),
+every backend method has to be wrapped in `logos.watch(...)`:
 
 ```qml
 logos.watch(backend.foo(args),
@@ -174,18 +169,21 @@ logos.watch(backend.foo(args),
     function(error) { /* error */ })
 ```
 
-Our `_refreshPreview` calls `backend.loadLocalPhotoUrl(...)` and
-treats the return value as if it's a string. JS sees an empty
-"unwrapped" default → empty string → our QML wrongly classifies it
-as "backend returned no URL".
+Our `_refreshPreview` (and the `_decodeGeohashCentroid` cache miss
+path) called the SLOT and treated the return value as a sync string.
+JS got the unwrapped empty default → "no URL".
 
-**Fix (next step):** rewrite `_refreshPreview` to use `logos.watch`,
-mirroring the calc-tutorial idiom. Same fix likely applies to
-`decodeGeohash` in `Main.qml`'s `_decodeGeohashCentroid` (currently
-synchronous-style), though decodeGeohash hasn't visibly failed yet —
-it may be benefiting from `QtRO` round-tripping fast enough that the
-"empty default" never gets observed in the cache-miss path. Worth
-fixing both regardless.
+Verified the running basecamp's `LogosQmlBridge` exposes `watch`,
+`module`, `model`, `callModule`, `callModuleAsync` — confirmed by
+inspecting `plugins/main_ui/main_ui.so` symbol table in the pinned
+build (`b44a5cf4787f…`). The bridge source in our local nix-store
+snapshot was stale; the live binary has the full surface.
+
+Fix landed: both `_refreshPreview` and `_decodeGeohashCentroid` now
+use `logos.watch(...)`. Centroid cache became async-aware — first
+miss returns null + kicks off the watch, the resolved callback
+overwrites the cache entry and triggers `_rebuildBindings()` so the
+marker appears once the centroid arrives.
 
 ### Attempt 5 — `QResource::registerResource` of a runtime-built `.rcc`
 
@@ -202,14 +200,25 @@ yet.
 
 ## Decision
 
-Proceed with **Attempt 4 (file:// under pluginPath)**. Fix the
-`logos.watch` mismatch first, then verify the preview lands, then port
-the same pattern to the reference-detail dialog.
+**Attempt 4 wins.** `file://` under the plugin's runtime install dir
+is the canonical channel; the bytes go through QtRO as a small QString
+URL, the file lives on disk under a sandbox-allowed root, QML renders
+it via plain `Image.source`. Cache key is the SHA-256 prefix of the
+bytes so picking the same photo twice is free.
 
-If Attempt 4 turns out to have a fatal flaw (interceptor canonicalises
-the path differently than I think; cache permissions get scrubbed by
-basecamp on app start; etc.) — fall back to Attempt 5.
+Next steps:
 
-`QQuickImageProvider` (Attempt 2) stays parked unless we get a
-basecamp upstream answer that says "yes, image:// is routed past the
-interceptor, you just need a hook to register".
+1. Port the same channel to the reference-detail dialog. The backend
+   already has `fetchPhotoAsync(cid)` returning bytes via the
+   `photoReady(cid, QByteArray)` signal. Wire a write-to-pluginPath
+   step in `_emitPhotoReady` (mirror `loadLocalPhotoUrl`'s helper)
+   and emit the resulting `file://` URL alongside the bytes, or
+   switch the signal payload to a `QString url` and drop the bytes
+   entirely.
+2. Close out upstream basecamp issue #189 with the answer: "qrc and
+   file under pluginPath are the only sanctioned channels; QtRO SLOTs
+   are async from QML and must be wrapped in logos.watch." Useful for
+   the next module author.
+
+`QQuickImageProvider` (Attempt 2) stays parked. Attempt 5 (runtime
+`.rcc`) is dead — Attempt 4 is simpler and demonstrably works.
