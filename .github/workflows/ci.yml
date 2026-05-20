@@ -91,6 +91,15 @@ jobs:
         working-directory: logos-witness-ui-qml
         run: nix build '.#lgx' --print-build-logs
 
+      - name: Build UI module .#lib
+        working-directory: logos-witness-ui-qml
+        # `.#lib` produces the raw .so + replica factory before they're
+        # packaged into the .lgx — exactly the artifact `lm metadata`
+        # and `lm methods` inspect. Without it we'd be checking the
+        # core plugin's surface only and would have missed (e.g.) a
+        # SLOT rename on the UI's .rep file going out unnoticed.
+        run: nix build '.#lib' --out-link result-lib --print-build-logs
+
       - name: Verify all QML files are bundled
         working-directory: logos-witness-ui-qml
         run: |
@@ -161,6 +170,21 @@ jobs:
       - name: Inspect plugin methods (locked Q_INVOKABLE surface)
         working-directory: logos-witness-core
         run: ./lm-tool/bin/lm methods result-lib/lib/logos_witness_core_plugin.so
+
+      # Same inspection for the UI plugin. Catches .rep / metadata
+      # drift on the hybrid backend (SLOTs renamed, PROPs added but
+      # not surfaced, dependency declarations out of sync with the
+      # generated typed accessor), which is the most likely class of
+      # silent regression now that QML talks to its own C++ backend
+      # via QtRO. lm-tool was built above for the core check; reuse
+      # it via a relative path.
+      - name: Inspect UI plugin metadata
+        working-directory: logos-witness-ui-qml
+        run: ../logos-witness-core/lm-tool/bin/lm metadata result-lib/lib/logos_witness_ui_qml_plugin.so
+
+      - name: Inspect UI plugin methods (locked SLOT surface)
+        working-directory: logos-witness-ui-qml
+        run: ../logos-witness-core/lm-tool/bin/lm methods result-lib/lib/logos_witness_ui_qml_plugin.so
 
       # SPEC §9 item 6 ("Headless integration — logoscore module load +
       # read-side invokables") — temporarily removed 2026-05-19. The

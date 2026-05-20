@@ -4,15 +4,20 @@ import QtQuick.Layouts 1.15
 import QtQuick.Dialogs
 import "SubmitHelpers.js" as SH
 
-// Phases 3.1 + 3.2 + 3.3: photo picker, geohash drop-pin via MapView,
-// timestamp confirm, and submit wire-up to logos_witness_core.
-// SPEC §7.2: user must click Submit explicitly — there's no auto-publish
-// path. Submit stays disabled until file + pin + timestamp are all set.
+// Photo picker, geohash drop-pin via MapView, timestamp confirm, and
+// submit wire-up to the UI plugin's C++ backend (which proxies to
+// logos_witness_core). SPEC §7.2: user must click Submit explicitly;
+// no auto-publish. Submit stays disabled until file + pin + timestamp
+// are all set.
 //
-// No inline photo preview: basecamp installs a DenyAll
-// QNetworkAccessManager on every UI plugin's QML engine, so
-// `Image.source = file:///…` is rejected for any local file. Filename
-// only on the Photo tab; core module reads the bytes on submit.
+// Inline photo preview is wired through the hybrid backend's
+// loadLocalPhotoUrl SLOT: basecamp's QML engine installs a DenyAll
+// QNetworkAccessManager + a RestrictedUrlInterceptor that blocks
+// every URL scheme except `qrc:` and `file://` under the plugin's
+// runtime install dir. The backend reads the picked file, copies the
+// bytes into preview-cache/ under that dir, and hands QML back a
+// `file://` URL the interceptor accepts. See
+// docs/photo-display-investigation.md for the channel rationale.
 //
 // Default timestamp is "now" (the moment the user opened this dialog),
 // not the file mtime. v0 doesn't read EXIF DateTimeOriginal — that's a

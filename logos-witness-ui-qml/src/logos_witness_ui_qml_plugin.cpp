@@ -9,8 +9,10 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFileInfoList>
 #include <QMetaObject>
 #include <QRunnable>
+#include <QThread>
 #include <QThreadPool>
 #include <QTimer>
 #include <QUrl>
@@ -20,6 +22,13 @@
 namespace {
 constexpr int kRefreshIntervalMs = 5000;
 constexpr const char* kCoreModule = "logos_witness_core";
+// loadLocalPhotoUrl size + cache caps. 200 MB single-file ceiling
+// matches what a 24MP RAW or panorama JPEG plausibly comes in at;
+// anything beyond is almost certainly a wrong file pick and we
+// shouldn't OOM ui-host trying to readAll() it. 1 GB total cache
+// holds ~250 typical 4 MB photos before LRU eviction kicks in.
+constexpr qint64 kMaxPreviewBytes = 200LL * 1024 * 1024;
+constexpr qint64 kMaxPreviewCacheBytes = 1024LL * 1024 * 1024;
 
 // Translate core's listInscriptions return shape (QVariantList of
 // QVariantMap) into the same shape we hand to QML's auto-syncing
@@ -73,20 +82,24 @@ void LogosWitnessUiQmlPlugin::initLogos(LogosAPI* api)
 
     // Kick subscribeFeed off-thread so initLogos doesn't block on a
     // cold core. ui-host calls initLogos from its main thread; we
-    // don't own that thread. The worker calls subscribeFeed +
-    // populates the initial refs list, then hands off to the timer.
+    // don't own that thread. The worker calls subscribeFeed via the
+    // thread-safe wrapper (marshals onto the backend thread, the
+    // only thread that may touch m_coreClient), then hands off to
+    // the timer.
     QThreadPool::globalInstance()->start(std::function<void()>([this]() {
         // subscribeFeed has no return; ignore reply value.
-        if (m_coreClient) {
-            m_coreClient->invokeRemoteMethod(
-                kCoreModule, "subscribeFeed", QVariantList{});
-        }
+        _invokeCoreSync(QStringLiteral("subscribeFeed"), QVariantList{});
         // First refresh: populate refs PROP + deliveryReady PROP.
         QMetaObject::invokeMethod(this, "_refreshFromCore",
                                   Qt::QueuedConnection);
+        // Subscribe to core's referenceObserved event via the
+        // backend thread (requestObject + onEvent both touch
+        // non-thread-safe SDK state). singleShot(0) on a QObject
+        // owned by the backend thread runs in that thread's event
+        // loop.
+        QMetaObject::invokeMethod(this, "_subscribeToCoreEvents",
+                                  Qt::QueuedConnection);
     }));
-
-    _subscribeToCoreEvents();
 
     // Set up the 5 s polling Timer. Cheap (snapshot in core's
     // in-memory store + a bool read) and the backstop for the push
@@ -105,62 +118,58 @@ void LogosWitnessUiQmlPlugin::initLogos(LogosAPI* api)
 void LogosWitnessUiQmlPlugin::_subscribeToCoreEvents()
 {
     if (!m_logosAPI || !m_coreClient) return;
+    if (m_coreObject) return;  // idempotent
     // Core emits `referenceObserved(QByteArray refBytes)` whenever
     // submitPhoto succeeds locally or delivery_module hands a new
-    // peer ref to subscribeFeed. We don't care about the bytes here —
-    // _refreshFromCore() pulls a full list snapshot and pushes it
-    // into the PROP, so the push channel just triggers a sooner-than-
-    // 5 s refresh. requestObject is potentially blocking (resolves a
-    // QtRO replica), so do it on a worker; the 5 s polling timer
-    // covers us if subscription fails.
-    QThreadPool::globalInstance()->start(std::function<void()>([this]() {
-        if (!m_coreClient) return;
-        LogosObject* obj = m_coreClient->requestObject(kCoreModule);
-        if (!obj) {
-            qWarning() << "logos_witness_ui_qml: requestObject(core) "
-                          "failed; falling back to 5 s polling";
-            return;
-        }
-        m_coreObject = obj;
-        obj->onEvent(
-            QStringLiteral("referenceObserved"),
-            [this](const QString& /*evt*/, const QVariantList& /*data*/) {
-                QMetaObject::invokeMethod(this, "_refreshFromCore",
-                                          Qt::QueuedConnection);
-            });
-    }));
+    // peer ref to subscribeFeed. We don't care about the bytes
+    // here — _refreshFromCore() pulls a full list snapshot and
+    // pushes it into the PROP, so the push channel just triggers a
+    // sooner-than-5 s refresh.
+    //
+    // requestObject + onEvent both touch SDK state (QHash writes in
+    // LogosAPIConsumer, replica acquisition) that isn't thread-safe;
+    // this slot is invoked via QueuedConnection from initLogos's
+    // worker so we always run on the backend thread. requestObject
+    // can block up to 20 s waiting for the QtRO replica handshake on
+    // a cold core — that's a one-time startup cost; the 5 s polling
+    // timer covers us if subscription fails.
+    LogosObject* obj = m_coreClient->requestObject(kCoreModule);
+    if (!obj) {
+        qWarning() << "logos_witness_ui_qml: requestObject(core) "
+                      "failed; falling back to 5 s polling";
+        return;
+    }
+    m_coreObject = obj;
+    obj->onEvent(
+        QStringLiteral("referenceObserved"),
+        [this](const QString& /*evt*/, const QVariantList& /*data*/) {
+            QMetaObject::invokeMethod(this, "_refreshFromCore",
+                                      Qt::QueuedConnection);
+        });
 }
 
 void LogosWitnessUiQmlPlugin::_refreshFromCore()
 {
     if (!m_coreClient) return;
-    const QVariant rawRefs = m_coreClient->invokeRemoteMethod(
-        kCoreModule, "listInscriptions", QVariantList{});
-    setRefs(normaliseRefs(rawRefs));
-
-    const QVariant rawDelivery = m_coreClient->invokeRemoteMethod(
-        kCoreModule, "deliveryReady", QVariantList{});
-    setDeliveryReady(rawDelivery.toBool());
+    setRefs(normaliseRefs(_invokeCoreSync(
+        QStringLiteral("listInscriptions"), QVariantList{})));
+    setDeliveryReady(_invokeCoreSync(
+        QStringLiteral("deliveryReady"), QVariantList{}).toBool());
 }
 
 QVariantMap LogosWitnessUiQmlPlugin::decodeGeohash(QString geohash)
 {
-    // Cheap (no I/O) — runs synchronously on the backend thread.
-    // Core's decodeGeohash returns the same QVariantMap shape we
-    // forward to QML.
+    // Cheap (no I/O). This SLOT is invoked by QtRO on the backend
+    // thread, so the call to _invokeCoreSync hits its fast path (no
+    // marshalling — direct invocation).
     if (!m_coreClient) {
         QVariantMap r;
         r["ok"] = false;
         r["error"] = QStringLiteral("backend not initialised");
         return r;
     }
-    const QVariant raw = m_coreClient->invokeRemoteMethod(
-        kCoreModule, "decodeGeohash", QVariantList{geohash});
-    if (raw.canConvert<QVariantMap>()) return raw.toMap();
-    QVariantMap r;
-    r["ok"] = false;
-    r["error"] = QStringLiteral("decodeGeohash returned non-map");
-    return r;
+    return normaliseMap(_invokeCoreSync(
+        QStringLiteral("decodeGeohash"), QVariantList{geohash}));
 }
 
 void LogosWitnessUiQmlPlugin::submitPhotoAsync(QString localId,
@@ -168,8 +177,13 @@ void LogosWitnessUiQmlPlugin::submitPhotoAsync(QString localId,
                                                 QString timestamp,
                                                 QString geohash)
 {
-    // Run the blocking submit on a worker so the backend's own thread
-    // stays responsive for fetch / decodeGeohash / refresh ticks.
+    // Worker just exists to keep the QML thread responsive while we
+    // wait for the submit to round-trip; the actual core call is
+    // serialised through the backend thread (BlockingQueuedConnection
+    // inside _invokeCoreSync). All workers and the backend thread
+    // therefore queue against the same single-threaded SDK; no
+    // submit-while-fetch parallelism in core, but that never existed
+    // — pretending it did was the bug we're fixing.
     QThreadPool::globalInstance()->start(std::function<void()>(
         [this, localId, filePath, timestamp, geohash]() {
         if (!m_coreClient) {
@@ -177,15 +191,14 @@ void LogosWitnessUiQmlPlugin::submitPhotoAsync(QString localId,
                             QStringLiteral("backend not initialised"));
             return;
         }
-        const QVariant raw = m_coreClient->invokeRemoteMethod(
-            kCoreModule, "submitPhoto",
-            QVariantList{filePath, timestamp, geohash});
-        if (!raw.canConvert<QVariantMap>()) {
+        const QVariantMap m = normaliseMap(_invokeCoreSync(
+            QStringLiteral("submitPhoto"),
+            QVariantList{filePath, timestamp, geohash}));
+        if (m.isEmpty()) {
             _emitSubmitDone(localId, {}, {}, false, false,
-                            QStringLiteral("submitPhoto returned non-map"));
+                            QStringLiteral("submitPhoto returned no result"));
             return;
         }
-        const QVariantMap m = raw.toMap();
         const bool ok = m.value("ok").toBool();
         const QString cid = m.value("storage_cid").toString();
         const QString contentHash = m.value("content_hash").toString();
@@ -215,13 +228,12 @@ void LogosWitnessUiQmlPlugin::fetchPhotoAsync(QString cid)
             _emitPhotoFailed(cid, QStringLiteral("backend not initialised"));
             return;
         }
-        const QVariant raw = m_coreClient->invokeRemoteMethod(
-            kCoreModule, "fetchPhoto", QVariantList{cid});
-        if (!raw.canConvert<QVariantMap>()) {
-            _emitPhotoFailed(cid, QStringLiteral("fetchPhoto returned non-map"));
+        const QVariantMap m = normaliseMap(_invokeCoreSync(
+            QStringLiteral("fetchPhoto"), QVariantList{cid}));
+        if (m.isEmpty()) {
+            _emitPhotoFailed(cid, QStringLiteral("fetchPhoto returned no result"));
             return;
         }
-        const QVariantMap m = raw.toMap();
         if (!m.value("ok").toBool()) {
             _emitPhotoFailed(cid, m.value("error").toString());
             return;
@@ -273,27 +285,38 @@ void LogosWitnessUiQmlPlugin::_emitPhotoFailed(QString cid, QString error)
     }, Qt::QueuedConnection);
 }
 
-// _coreCall / _coreCallList are reserved helpers for future sync calls
-// from the backend thread. Currently unused (every existing call site
-// inlines invokeRemoteMethod for clarity); kept on the header so a
-// follow-up can drop in a typed-accessor migration without touching
-// the public surface.
-QVariantMap LogosWitnessUiQmlPlugin::_coreCall(const QString& method,
-                                                const QVariantList& args)
+// Backend-thread slot. Runs the actual invokeRemoteMethod call on the
+// thread that owns m_coreClient. NEVER call directly from a worker —
+// call _invokeCoreSync instead, which marshals here via
+// BlockingQueuedConnection.
+QVariant LogosWitnessUiQmlPlugin::_invokeCoreOnBackendThread(
+    const QString& method, const QVariantList& args)
 {
     if (!m_coreClient) return {};
-    const QVariant raw = m_coreClient->invokeRemoteMethod(
-        kCoreModule, method, args);
-    return raw.canConvert<QVariantMap>() ? raw.toMap() : QVariantMap{};
+    return m_coreClient->invokeRemoteMethod(kCoreModule, method, args);
 }
 
-QVariantList LogosWitnessUiQmlPlugin::_coreCallList(const QString& method,
-                                                    const QVariantList& args)
+// Worker-callable wrapper. If we're already on the backend thread
+// (e.g. the 5 s refresh timer), call directly. From a worker thread,
+// post a BlockingQueuedConnection invocation and wait for the
+// backend's event loop to service it. This serializes every
+// invokeRemoteMethod through the backend thread — fine for
+// correctness (the upstream SDK isn't reentrant) and acceptable for
+// perf (no submit-while-fetch parallelism existed in core anyway —
+// concurrent core calls would have been a lie).
+QVariant LogosWitnessUiQmlPlugin::_invokeCoreSync(
+    const QString& method, const QVariantList& args)
 {
-    if (!m_coreClient) return {};
-    const QVariant raw = m_coreClient->invokeRemoteMethod(
-        kCoreModule, method, args);
-    return normaliseRefs(raw);
+    if (QThread::currentThread() == this->thread()) {
+        return _invokeCoreOnBackendThread(method, args);
+    }
+    QVariant out;
+    QMetaObject::invokeMethod(
+        this, "_invokeCoreOnBackendThread", Qt::BlockingQueuedConnection,
+        Q_RETURN_ARG(QVariant, out),
+        Q_ARG(QString, method),
+        Q_ARG(QVariantList, args));
+    return out;
 }
 
 // Find the directory this .so was loaded from. basecamp's
@@ -309,6 +332,33 @@ static QString pluginInstallDir(const void* addrInThisSo)
     return QFileInfo(QString::fromLocal8Bit(info.dli_fname)).absolutePath();
 }
 
+// Keep the preview cache under kMaxPreviewCacheBytes by deleting
+// the oldest-mtime entries first. Best-effort: a delete failure
+// (file locked by readback, perms, …) is logged and skipped, never
+// fails the caller — running over budget is preferable to refusing
+// the new photo.
+static void evictPreviewCache(const QString& cacheDir,
+                              qint64 budgetBytes)
+{
+    QDir d(cacheDir);
+    if (!d.exists()) return;
+    QFileInfoList entries = d.entryInfoList(
+        QDir::Files | QDir::NoDotAndDotDot, QDir::Time | QDir::Reversed);
+    qint64 total = 0;
+    for (const QFileInfo& fi : entries) total += fi.size();
+    if (total <= budgetBytes) return;
+    for (const QFileInfo& fi : entries) {
+        if (total <= budgetBytes) break;
+        const qint64 sz = fi.size();
+        if (QFile::remove(fi.absoluteFilePath())) {
+            total -= sz;
+        } else {
+            qWarning() << "logos_witness_ui_qml: preview-cache evict"
+                       << "failed to delete" << fi.absoluteFilePath();
+        }
+    }
+}
+
 QString LogosWitnessUiQmlPlugin::loadLocalPhotoUrl(QString filePath)
 {
     // Strip any `file://` scheme the QML picker handed us — QFile
@@ -320,6 +370,15 @@ QString LogosWitnessUiQmlPlugin::loadLocalPhotoUrl(QString filePath)
     QFile src(path);
     if (!src.exists()) {
         return QStringLiteral("error:file not found: ") + path;
+    }
+    // Size cap BEFORE open so a user pointing at a multi-GB blob
+    // can't OOM us via readAll().
+    const qint64 size = QFileInfo(path).size();
+    if (size > kMaxPreviewBytes) {
+        return QStringLiteral("error:file too large: ") + path
+             + QStringLiteral(" (") + QString::number(size)
+             + QStringLiteral(" bytes; max is ")
+             + QString::number(kMaxPreviewBytes) + QStringLiteral(")");
     }
     if (!src.open(QIODevice::ReadOnly)) {
         return QStringLiteral("error:cannot open file: ")
@@ -363,6 +422,10 @@ QString LogosWitnessUiQmlPlugin::loadLocalPhotoUrl(QString filePath)
             return QStringLiteral("error:short write to preview file: ") + outPath;
         }
         out.close();
+        // Cache is LRU-bounded — every fresh write trims the dir to
+        // budget. Cheap on the common path (a single readdir + size
+        // sum), expensive only when we actually need to evict.
+        evictPreviewCache(cacheDir, kMaxPreviewCacheBytes);
     }
     return QStringLiteral("file://") + outPath;
 }

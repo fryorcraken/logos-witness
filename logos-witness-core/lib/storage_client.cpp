@@ -249,30 +249,56 @@ StorageClient::DownloadResult StorageClient::download(const QString& cid,
 
     QDir dir(cacheDir);
     if (!dir.exists()) dir.mkpath(".");
-    const QString destPath = dir.filePath(cid + ".jpg");
-    const QUrl destUrl = QUrl::fromLocalFile(destPath);
+    // Per-attempt unique paths. If the 5 s local timeout fires while
+    // the underlying libstorage download is still running, the local
+    // session may still write `destPath` after we've moved on — a
+    // network attempt writing the same path would then race the
+    // straggler write, producing a corrupt JPEG. Distinct paths
+    // mean we read the winner cleanly; the loser's bytes (if any)
+    // are orphaned and reaped by the OS / cleaned up below.
+    const QString localPath = dir.filePath(cid + ".local.jpg");
+    const QString netPath   = dir.filePath(cid + ".net.jpg");
+    const QString finalPath = dir.filePath(cid + ".jpg");
 
     // Fast path: local repo. Short timeout (5s) — a true local hit
     // returns near-instantly; failure means "not in local repo, try
     // the network."
-    auto localAttempt = _downloadOnce(logos_, cid, destUrl, /*local=*/true, 5000);
-    if (!localAttempt.ok) {
+    auto localAttempt = _downloadOnce(
+        logos_, cid, QUrl::fromLocalFile(localPath), /*local=*/true, 5000);
+    QString winnerPath;
+    if (localAttempt.ok) {
+        winnerPath = localPath;
+    } else {
         // Network fallback. Longer timeout for DHT lookup + transfer.
-        auto netAttempt = _downloadOnce(logos_, cid, destUrl, /*local=*/false, 60000);
+        auto netAttempt = _downloadOnce(
+            logos_, cid, QUrl::fromLocalFile(netPath), /*local=*/false, 60000);
         if (!netAttempt.ok) {
+            // Best-effort cleanup of either attempt's partial bytes.
+            QFile::remove(localPath);
+            QFile::remove(netPath);
             r.error = "local: " + localAttempt.error
                     + " | network: " + netAttempt.error;
             return r;
         }
+        winnerPath = netPath;
     }
 
-    QFile f(destPath);
+    QFile f(winnerPath);
     if (!f.open(QIODevice::ReadOnly)) {
-        r.error = "downloaded file not readable: " + destPath;
+        r.error = "downloaded file not readable: " + winnerPath;
         return r;
     }
     r.data = f.readAll();
     f.close();
+
+    // Publish under the canonical path the caller expects, then drop
+    // both attempt files. The straggler (if any) lands in an orphan
+    // we'll prune; the rename ensures concurrent callers for the
+    // same CID see a coherent file at `finalPath`.
+    QFile::remove(finalPath);
+    QFile::rename(winnerPath, finalPath);
+    QFile::remove(localPath);
+    QFile::remove(netPath);
 
     r.ok = true;
     return r;

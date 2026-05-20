@@ -176,12 +176,25 @@ Item {
                     anchors.fill: parent
                     anchors.margins: 6
                     spacing: 8
+                    // Include enough context (timestamp + geohash)
+                    // for the user to recognise which submission
+                    // failed once we hide the optimistic row. Without
+                    // this, the banner says only "Upload failed" with
+                    // no anchor back to the photo the user picked.
                     Label {
                         Layout.fillWidth: true
                         wrapMode: Text.WordWrap
                         font.pixelSize: 11
                         color: "#c0392b"
-                        text: "Upload failed: " + root.uploadError
+                        text: {
+                            var ctx = ""
+                            if (root.pendingUpload) {
+                                var ts = Number(root.pendingUpload.timestamp)
+                                ctx = " (" + TM.formatTimestamp(ts)
+                                    + " @ " + root.pendingUpload.geohash + ")"
+                            }
+                            return "Upload failed" + ctx + ": " + root.uploadError
+                        }
                     }
                     Button {
                         visible: root.pendingUpload !== null
@@ -610,20 +623,32 @@ Item {
     }
 
     // Merge backend.refs (truth) with pendingRefs (optimistic).
-    // Dedup by content_hash; a real ref always wins over a pending
-    // row, but pending rows without a content_hash yet are kept.
+    // Dedup by content_hash where we have it; fall back to a
+    // (timestamp, geohash) tuple match for pending rows that haven't
+    // received their content_hash yet (race where backend.refs
+    // updates before submitDone arrives, or a peer broadcast lands
+    // the same ref during a retry). Tuple collisions across distinct
+    // submits are vanishingly rare (same exact second + same exact
+    // 8-char geohash from the same instance); the cost of a false
+    // dedup is hiding a duplicate ref for one refresh tick — fine.
     function _rebuildEffectiveRefs() {
         var truth = backend && backend.refs ? backend.refs : []
         var seenHashes = {}
+        var seenTuples = {}
         var merged = []
         for (var i = 0; i < truth.length; i++) {
             var r = truth[i]
             merged.push(r)
             if (r && r.content_hash) seenHashes[String(r.content_hash)] = true
+            if (r && r.timestamp !== undefined && r.geohash) {
+                seenTuples[Number(r.timestamp) + "|" + String(r.geohash)] = true
+            }
         }
         for (var j = 0; j < root.pendingRefs.length; j++) {
             var p = root.pendingRefs[j]
             if (p.content_hash && seenHashes[String(p.content_hash)]) continue
+            if (p.timestamp !== undefined && p.geohash
+                && seenTuples[Number(p.timestamp) + "|" + String(p.geohash)]) continue
             merged.push(p)
         }
         root.effectiveRefs = merged
@@ -671,6 +696,19 @@ Item {
     // decode failed; object = asked and succeeded.
     property var _centroidCache: ({})
 
+    // Coalesce centroid-resolution rebuilds: a refs PROP update that
+    // brings N new geohashes fires N async watches, each of which
+    // wants to trigger a full _rebuildBindings on resolve. Without
+    // coalescing that's O(N²) (every rebuild walks every ref). The
+    // timer batches resolutions in the same event-loop tick into a
+    // single rebuild.
+    Timer {
+        id: centroidRebuildDispatcher
+        interval: 0
+        repeat: false
+        onTriggered: root._rebuildBindings()
+    }
+
     function _decodeGeohashCentroid(geohash) {
         if (!geohash) return null
         var cached = root._centroidCache[geohash]
@@ -690,15 +728,15 @@ Item {
                     root._centroidCache[geohash] =
                         { latitude: raw.latitude, longitude: raw.longitude }
                 }
-                root._rebuildBindings()
+                centroidRebuildDispatcher.restart()
             },
             function (err) {
                 console.warn("decodeGeohash failed for", geohash, ":", err)
                 root._centroidCache[geohash] = null
-                root._rebuildBindings()
+                centroidRebuildDispatcher.restart()
             })
         return null  // initial walk: marker will appear after the
-                    // async resolve + rebuild
+                    // async resolve + coalesced rebuild
     }
 
     function _showDetailFor(contentHash) {
