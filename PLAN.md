@@ -3,62 +3,78 @@
 > Companion to `SPEC.md`. Vertical slices, dependency-ordered, sized S/M.
 > Each task has acceptance criteria and a concrete verification step.
 
-## Status (2026-05-18)
+## Status (2026-05-20)
 
-**Done:** Phase 0 (skipped), 1.1 / 1.2 / 1.3, 2.1, 2.2, 3.1, 3.2, 3.3, 3.4,
-3.5, 4.1, 4.2, 4.3, 5.1 + 5.2 (Storage), 6.1 + 6.2 (Delivery), 9.1 + 9.2
-(CI + first tagged release `v0.0.1`). Phase 6 dogfood proved
-cross-instance reference broadcast; Phase 7 (chain inscribe via
-`zone-sdk`) and Phase 8 (missing-blob UX) are the remaining v0
-blockers.
+**Done:** Phase 0 (skipped), 1.1 / 1.2 / 1.3, 2.1, 2.2, 3.1, 3.2, 3.3,
+3.4, 3.5, 4.1, 4.2, 4.3, 5.1 + 5.2 (Storage), 6.1 + 6.2 (Delivery),
+9.1 + 9.2 (CI + `v0.0.1`). **Phase-1 hybrid backend migration**
+landed in `b1e3129` + `200962e` + `34f3d06` (commits below).
+Cross-instance reference broadcast verified end-to-end on 2026-05-18.
+**Submit-dialog photo preview working** as of 2026-05-20.
 
 **v0.0.1 release (2026-05-15)** — first tagged build. Linux x86_64.
-Phases 1–6 functionality. Notes:
+Phases 1–6 functionality.
 https://github.com/fryorcraken/logos-witness/releases/tag/v0.0.1.
-Built against `pre-release-b44a5cf-260`. Verified hybrid UI scaffold
-landed afterward (see below).
+Built against `pre-release-b44a5cf-260`.
 
-**Hybrid `ui_qml + C++ backend` scaffold (`f485dda`, 2026-05-18)** —
-`logos_witness_ui_qml` now ships a native plugin alongside the QML
-view, both in the same `.lgx`. Empty stub backend; QML call sites
-still use `logos.callModule(...)`. The scaffold unblocks task #27
-(migrate call sites onto typed slots) and gives us a deliverable
-that satisfies RC2's lgpm install rule (PR #8 requires a non-empty
-`main`). SPEC amended to document the hybrid pattern, the
-`deliveryReady()` invokable that Phase 6 added, and the data-URL
-photo-display workaround. New CI gate (`.github/workflows/ci.yml`)
-asserts every `.lgx` carries the declared `main` plugin .so.
+**Hybrid backend Phase 1 complete (`b1e3129`/`200962e`/`34f3d06`,
+2026-05-20)** — every `logos.callModule(...)` call site has moved
+off the QML render thread and onto the UI plugin's C++ backend
+(which runs in `ui-host`). The backend now owns:
 
-**CI logoscore step temporarily removed (2026-05-19)** — the SPEC §9
-item 6 headless-integration step in `ci.yml` started `logoscore -D`
-in foreground, blocking the shell so the `status` poll never fired;
-GHA cancelled the run after 6 h (5 reds in a row on `main`).
-Backgrounding alone would not have saved it: the witness core
-plugin metadata declares hard deps on `storage_module` +
-`delivery_module`, and the bundled logoscore-cli only ships
-`capability_module` — `load-module logos_witness_core` would
-report "Cannot resolve dependencies" (verified locally against the
-cached store path). Step removed for now; the deps-aware redo is
-tracked. Coverage that remains: `lm metadata` + `lm methods`
-(catches surface drift), ctest (unit), dogfood (full round-trip).
+- auto-syncing PROPs (`refs`, `deliveryReady`, `backendStatus`);
+- fire-and-forget SLOTs (`submitPhotoAsync`, `fetchPhotoAsync`,
+  `loadLocalPhotoUrl`) with paired completion SIGNALs
+  (`submitDone`, `photoReady`, `photoFailed`);
+- one sync passthrough (`decodeGeohash`);
+- optimistic timeline insert with a per-row "uploading…" pill;
+- inline photo preview in the Submit dialog (`file://` URL under
+  the plugin's runtime install dir — see
+  `docs/photo-display-investigation.md`).
 
-**Resume here.** Two parallel threads:
+Post-review hardening (`34f3d06`): all worker→core RPCs serialise
+through the backend thread via `BlockingQueuedConnection` (upstream
+SDK isn't reentrant); pending-row dedup uses a `(timestamp, geohash)`
+tuple fallback; centroid-rebuild coalesced behind a 0 ms Timer
+(was O(N²)); `loadLocalPhotoUrl` has a 200 MB size cap + 1 GB LRU
+cache eviction; storage download writes to per-attempt unique paths
+to dodge the local-vs-network race; CI now runs `lm metadata` +
+`lm methods` against the UI plugin .so too.
 
-1. **Verify cross-instance photo fetch** (single-box alice + bob).
-   Phase 6 verified that References propagate; we have NOT verified
-   that `fetchPhoto(cid)` on the receiving instance actually pulls
-   bytes from the originating instance's `storage_module`. SPEC §2.1
-   flags the `bootstrap-node` gap as a likely blocker. One dogfood
-   experiment — if it works, file a follow-up; if not, document the
-   limitation and move on. Task #37.
-2. **Task #27** — migrate `logos.callModule("logos_witness_core",
-   ...)` call sites onto typed slots on the new UI backend. Removes
-   the 40 ms `uploadDispatcher` Timer hack, removes the `deliveryReady`
-   poll loop in favour of a push signal, enables EXIF DateTimeOriginal
-   auto-fill in-process. Lands as v0.0.2.
+CLAUDE.md captures the **rule**: never run `logos.callModule(...)`
+on the QML render path — basecamp's bridge is sync-only.
 
-After both, Phase 7 (chain inscribe). Probe #25 (zone-sdk API
-discovery) is still queued and unblocks 7.2/7.3.
+**CI logoscore step removed (2026-05-19, still pending re-do)** —
+see SPEC §9 item 6 status note. Coverage that remains: `lm metadata`
++ `lm methods` on both .so files (catches surface drift), ctest
+(unit), dogfood (full round-trip).
+
+**Resume here.** Three threads, in order:
+
+1. **Detail-dialog photo display** — same `file://`-under-pluginPath
+   channel that Submit-dialog preview uses, applied to the
+   reference-detail dialog. Backend already has `fetchPhotoAsync(cid)`
+   landing bytes via `photoReady(cid, bytes)`; extend it to also
+   write the bytes through the existing preview-cache helper and emit
+   a `file://` URL. Closes the original v0 photo-display goal.
+   Closes upstream basecamp #189 with a "here's the channel that
+   actually works" comment.
+2. **Live/Offline pill investigation** — `backend.deliveryReady`
+   reads false on cold start and stays false. Could be (a) cold
+   delivery_module bootstrap taking >5 s past the first poll
+   (legitimate, would auto-clear), (b) the PROP isn't propagating
+   over QtRO (real bug). 10-min triage.
+3. **v0.0.2 release** once detail-dialog photo display lands.
+
+After v0.0.2: **Phase 7 (chain inscribe via `zone-sdk`)**. Probe
+#25 (zone-sdk API discovery) is still queued and unblocks 7.2/7.3.
+Task #27 (typed-accessor migration via `metadata.json.dependencies`
++ flake input) is **partially done** as a side effect of Phase 1 —
+the call sites moved, but the typed accessor itself wasn't wired
+(would need re-adding `logos_witness_core` as a flake input with a
+`github:` URL pointing at a pushed sha; we sidestepped via the
+untyped `LogosAPIClient::invokeRemoteMethod` path). Lift to typed
+accessors during Phase 7 when the deps story is settled.
 
 **RC2 compatibility (probe #24, 2026-05-16; probe #32, 2026-05-16;
 probe #33 cancelled)** — RC2 (`0.1.2-RC2`) bundles lgpm `8110734`
