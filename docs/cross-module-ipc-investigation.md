@@ -146,31 +146,109 @@ Our architecture splits the work the wrong way: a `core` plugin
 `ui_qml` plugin (`logos_witness_ui_qml`) drives it via QtRO. That
 split fits the SPEC but doesn't fit the SDK's IPC story.
 
+### v0.0.1 wasn't actually working — it was lucky
+
+We shipped `v0.0.1` on 2026-05-15 and dogfood-confirmed
+cross-instance reference broadcast at commit `92b6eac`. With
+hindsight, **that "working" status was a fluke, not a green
+build.** Re-examining the call shape: every cross-module call from
+`logos_witness_core` was hitting the same bootstrap-token gap
+described above; the call paths just happened to tolerate the
+silent failure for our specific traffic pattern:
+
+- `delivery_module.subscribe(topic)` — fire-and-forget side
+  effect; we ignored the return value, and the actual subscribe
+  side-effect happened anyway when the call reached the running
+  delivery_module node.
+- `delivery_module.send(payload)` — same shape; broadcasts went
+  out, return value was unchecked.
+- `storage_module.uploadUrl(...)` — sometimes landed (the request
+  reached storage_module even when the auth handshake failed
+  upstream), sometimes didn't. We attributed the misses to
+  "network issues" or "still bootstrapping" because there was
+  nothing visible in the log to say otherwise (see
+  [#163](https://github.com/logos-co/logos-basecamp/issues/163)
+  — stderr swallowed by the host).
+- `storage_module.downloadToUrl(...)` — same flaky pattern.
+
+The dogfood loop never exercised return-value-dependent calls in a
+tight loop, so the flakiness lived in the long tail. As Phase 1
+added more cross-module probes (`deliveryReady`, `storageReady`,
+the 5s `_refreshFromCore` polling tick, `_subscribeToCoreEvents`),
+the call rate climbed and the silent-failure rate became impossible
+to miss.
+
+The fact that v0.0.1 partially worked masked the underlying
+architectural mismatch. **Pre-0.1.2 made failure invisible; 0.1.2
+made it fatal.** We weren't degraded — we'd been broken since the
+core→storage integration in Phase 5.2.
+
 ## Path forward
 
-Three options, in priority order:
+Two options, ranked. We're currently waiting on the first, with the
+second queued as a fallback if upstream movement is slow.
 
-1. **Wait for upstream fix on
-   [#150](https://github.com/logos-co/logos-basecamp/issues/150).**
-   The OP proposed injecting a `capability_module` bootstrap token
-   into every loaded core plugin at load time (one-line fix in the
-   plugin loader). If/when this ships, our current architecture
-   works as-is.
+### Option 1 — Wait for upstream fix on [#150](https://github.com/logos-co/logos-basecamp/issues/150) (preferred)
 
-2. **Move storage + delivery calls into the UI plugin's C++
-   backend** (`logos_witness_ui_qml_plugin`), which runs alongside
-   `main_ui` in the basecamp process and presumably has the
-   bootstrap token. `logos_witness_core` becomes a thinner module
-   (in-memory store + protobuf + geohash + reference-batching) with
-   no cross-module IPC. The UI backend handles all storage/delivery
-   I/O directly. Bigger refactor; sidesteps #150 entirely.
+The OP proposed injecting a `capability_module` bootstrap token into
+every loaded core plugin at load time (one-line fix in the plugin
+loader). If/when this ships, our current architecture (core does
+storage + delivery I/O; UI plugin drives it via QtRO) works without
+code changes on our side.
 
-3. **Route storage + delivery calls through `logos.callModule(...)`
-   from QML.** The OP's workaround: QML runs in `main_ui`'s
-   process, which has all tokens. QML calls `logos.callModule(
-   "storage_module", "uploadUrl", ...)` directly, bypassing our
-   core. Our core becomes data-layer only. Largest refactor; most
-   explicitly hacks around the SDK gap.
+Status: **OPEN as of 2026-05-25**, with our reproduction
+[posted as a comment](https://github.com/logos-co/logos-basecamp/issues/150#issuecomment-4531834530)
+disproving dlipicar's "incompatible module-builder versions"
+hypothesis. Project is actively pushing upstream for movement on
+this issue.
+
+### Option 2 — Refactor storage + delivery into the UI plugin's C++ backend
+
+Sidesteps #150 entirely by moving every cross-module IPC call into
+`logos_witness_ui_qml_plugin`, which lives in `ui-host` (spawned by
+`main_ui`'s process tree) and **does** receive the bootstrap token.
+
+Concretely:
+
+- `logos_witness_core` becomes data-layer only:
+  - in-memory `InMemoryStore` of references
+  - protobuf encode/decode (`reference_codec.cpp`)
+  - geohash decode (`geohash.cpp`)
+  - EXIF strip (`exif_strip.cpp`)
+  - reference-batching state
+  - **no `storage_client.cpp`, no `delivery_client.cpp`** — those
+    move out
+- `logos_witness_ui_qml_plugin`'s C++ side gains:
+  - `m_logos->storage_module.*` calls — `init`, `start`, `uploadUrl`,
+    `downloadToUrl`, `exists` (whatever core was doing in
+    `storage_client.cpp`)
+  - `m_logos->delivery_module.*` calls — `createNode`, `start`,
+    `subscribe`, `send`, event handlers
+  - the Q_INVOKABLE surface previously on core (`submitPhotoAsync`,
+    `fetchPhotoAsync`, etc.) now does the work directly instead of
+    delegating to core
+  - core remains in the picture only for protobuf + geohash + EXIF
+    + in-memory store (called via the existing typed accessor
+    `m_logos->logos_witness_core.X(...)` which is pure-compute, no
+    cross-module IPC inside)
+
+Trade-offs:
+
+- ~half a day of refactor across both modules.
+- Spec ripple: the SPEC §1.3 "core module surface" contract still
+  holds (decodeReference, decodeGeohash, listInscriptions,
+  flushBatch — all pure-compute or in-memory). `submitPhoto`,
+  `fetchPhoto`, `subscribeFeed`, `deliveryReady`, `storageReady`
+  effectively move to the UI plugin's surface. Documentation pass
+  needed.
+- Net: smaller, focused core module; UI plugin owns all I/O. This
+  is actually closer to the shape that
+  [`logos-storage-ui`](https://github.com/logos-co/logos-storage-ui)
+  uses (which our research subagent flagged as the canonical
+  reference for this architecture).
+
+If #150 doesn't show movement within a reasonable window (~2 weeks
+from 2026-05-25), execute Option 2.
 
 Pinned for now at `f9378cc` (working tree clean as of 2026-05-25
 post-rollback). v0.0.2 release is blocked until one of these paths
