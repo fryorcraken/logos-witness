@@ -1,13 +1,21 @@
 cmake_minimum_required(VERSION 3.14)
 project(LogosWitnessCorePlugin LANGUAGES CXX)
 
+# Tests-only configure skips the plugin target, so it doesn't need the
+# LogosModule macro (which only ships inside the nix module-build env).
+# This lets CI run the pure-compute ctest targets in a plain toolchain
+# without realizing the storage/delivery deps. See the option() below.
+option(LOGOS_WITNESS_TESTS_ONLY "Configure only the ctest targets; skip the plugin + generated-code." OFF)
+
 # Provided by logos-module-builder via $LOGOS_MODULE_BUILDER_ROOT in nix builds.
-if(DEFINED ENV{LOGOS_MODULE_BUILDER_ROOT})
-    include($ENV{LOGOS_MODULE_BUILDER_ROOT}/cmake/LogosModule.cmake)
-elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/LogosModule.cmake")
-    include(cmake/LogosModule.cmake)
-else()
-    message(FATAL_ERROR "LogosModule.cmake not found")
+if(NOT LOGOS_WITNESS_TESTS_ONLY)
+    if(DEFINED ENV{LOGOS_MODULE_BUILDER_ROOT})
+        include($ENV{LOGOS_MODULE_BUILDER_ROOT}/cmake/LogosModule.cmake)
+    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/LogosModule.cmake")
+        include(cmake/LogosModule.cmake)
+    else()
+        message(FATAL_ERROR "LogosModule.cmake not found")
+    endif()
 endif()
 
 # Discover protobuf via pkg-config — the nixpkgs `protobuf` package's
@@ -19,12 +27,20 @@ pkg_check_modules(PROTOBUF REQUIRED IMPORTED_TARGET protobuf)
 pkg_check_modules(LIBJPEG  REQUIRED IMPORTED_TARGET libjpeg)
 find_program(PROTOC_EXECUTABLE NAMES protoc REQUIRED)
 
+# -DLOGOS_WITNESS_TESTS_ONLY=ON (declared at the top of this file) makes
+# CI build just the pure-compute ctest targets in a plain toolchain
+# WITHOUT realizing the storage_module / delivery_module dependencies —
+# whose nix build compiles delivery's zerokit/librln chain and fetches
+# Rust crates from crates.io (403s on cold CI runners; see ci.yml +
+# flake.nix). The full plugin build still happens in `nix build
+# .#lgx/.#lib`, which has the deps via moduleInputs.
+
 # Run logos-cpp-generator in dev-shell builds (cmake outside nix). The nix
 # build of `.#lgx` populates generated_code/ in its preConfigure phase;
 # without this step, dev-shell ctest can't compile the plugin because
 # storage_module_api.h and logos_sdk.h are missing.
 set(LOGOS_GENERATED_DIR ${CMAKE_CURRENT_SOURCE_DIR}/generated_code)
-if(NOT EXISTS ${LOGOS_GENERATED_DIR}/include/logos_sdk.h)
+if(NOT LOGOS_WITNESS_TESTS_ONLY AND NOT EXISTS ${LOGOS_GENERATED_DIR}/include/logos_sdk.h)
     find_program(LOGOS_CPP_GENERATOR logos-cpp-generator
         HINTS $ENV{LOGOS_CPP_SDK_ROOT}/bin
         REQUIRED)
@@ -91,30 +107,34 @@ add_custom_command(
 )
 set_source_files_properties(${PROTO_SRC} ${PROTO_HDR} PROPERTIES GENERATED TRUE)
 
-logos_module(
-    NAME logos_witness_core
-    SOURCES
-        src/logos_witness_core_interface.h
-        src/logos_witness_core_plugin.h
-        src/logos_witness_core_plugin.cpp
-        lib/geohash.h
-        lib/in_memory_store.h
-        lib/in_memory_store.cpp
-        lib/exif_strip.h
-        lib/exif_strip.cpp
-        lib/storage_client.h
-        lib/storage_client.cpp
-        lib/delivery_client.h
-        lib/delivery_client.cpp
-        ${PROTO_SRC}
-        ${PROTO_HDR}
-    INCLUDE_DIRS
-        ${PROTO_GEN_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/lib
-    LINK_LIBRARIES
-        PkgConfig::PROTOBUF
-        PkgConfig::LIBJPEG
-)
+# The plugin target needs the generated SDK headers + the LogosModule
+# macro (and transitively the dep build). Skip it in tests-only mode.
+if(NOT LOGOS_WITNESS_TESTS_ONLY)
+    logos_module(
+        NAME logos_witness_core
+        SOURCES
+            src/logos_witness_core_interface.h
+            src/logos_witness_core_plugin.h
+            src/logos_witness_core_plugin.cpp
+            lib/geohash.h
+            lib/in_memory_store.h
+            lib/in_memory_store.cpp
+            lib/exif_strip.h
+            lib/exif_strip.cpp
+            lib/storage_client.h
+            lib/storage_client.cpp
+            lib/delivery_client.h
+            lib/delivery_client.cpp
+            ${PROTO_SRC}
+            ${PROTO_HDR}
+        INCLUDE_DIRS
+            ${PROTO_GEN_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/lib
+        LINK_LIBRARIES
+            PkgConfig::PROTOBUF
+            PkgConfig::LIBJPEG
+    )
+endif()
 
 # -----------------------------------------------------------------------------
 # Tests
