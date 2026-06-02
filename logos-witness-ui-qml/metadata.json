@@ -7,7 +7,7 @@
   "main": "logos_witness_ui_qml_plugin",
   "view": "qml/Main.qml",
   "icon": "icon.png",
-  "dependencies": [],
+  "dependencies": ["logos_witness_core"],
 
   "nix": {
     "packages": {

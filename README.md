@@ -95,27 +95,36 @@ typed clients on first use.
 
 ### Basecamp compatibility
 
-This release is built against
-[`logos-basecamp@pre-release-b44a5cf-260`](https://github.com/logos-co/logos-basecamp/tree/pre-release-b44a5cf-260)
-(2026-05-08). The pin lives in [`scaffold.toml`](./scaffold.toml) and is
-recorded in every release's `manifest.txt`.
+This build targets
+[`logos-basecamp@0.1.2`](https://github.com/logos-co/logos-basecamp/tree/0.1.2)
+(= `tutorial-v2`, sha `2576ef8f`) — the version upstream supports and
+asked us to run on (logos-basecamp#150 / #169 / #176). Both witness
+modules pin `logos-module-builder@tutorial-v2` to match its SDK. The
+pins live in [`scaffold.toml`](./scaffold.toml) and the two `flake.nix`
+files, and are recorded in every release's `manifest.txt`.
 
-The newest tagged RC, `0.1.2-RC2`, is **not** compatible: it bundles an
-older `lgpm` that rejects QML-only modules whose `manifest.json`
-declares `main: {}` — which is our UI module's shape. The fix landed
-one `lgpm` commit later (PR #9, `865fc5a`); `pre-release-b44a5cf-260`
-is the first basecamp release to bundle that fix. The full rationale
-is captured in the `scaffold.toml` comment block. Running this build
-against a different basecamp pin is unsupported — the witness modules'
-Qt 6.9.2 ABI and the bundled lgpm's manifest-validation rules are both
-load-bearing.
+Running this build against a different basecamp pin is unsupported —
+the witness modules' Qt 6.9.2 ABI and the module-builder version that
+generated their typed accessors must both line up with the basecamp
+SDK they run against.
+
+**Dev vs portable — don't mix them.** A module ships in two variants:
+the **portable** `.lgx` (`linux-amd64`, self-contained, `$ORIGIN`
+rpath) runs against the **portable** Basecamp; the **dev** `.lgx`
+(`linux-amd64-dev`, unbundled, Nix-store rpath) runs against the
+**dev** Basecamp. They are intentionally separate and not
+interchangeable — running a dev package on a portable Basecamp (or
+vice versa) is expected to crash (per upstream, logos-basecamp#176).
+Always **install through `lgpm` or Basecamp's package manager**, which
+select the right variant; never hand-extract a `.lgx` or rename its
+variant key. The scaffold flow below does this for you.
 
 ## Install from a tagged release (Linux x86_64)
 
 Each tagged release attaches portable `.lgx` bundles for both witness
 modules plus a combined tarball. Pull them from the [Releases page](https://github.com/fryorcraken/logos-witness/releases)
-and drop them into your basecamp profile's `modules/` and
-`plugins/` directories (or feed them to `lgpm install`):
+and install them with `lgpm` (don't hand-copy the archives — let
+`lgpm` place each variant in the right directory):
 
 ```bash
 # Pick the latest release tag.

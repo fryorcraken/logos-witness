@@ -32,14 +32,20 @@ off the QML render thread and onto the UI plugin's C++ backend
   the plugin's runtime install dir — see
   `docs/photo-display-investigation.md`).
 
-Post-review hardening (`34f3d06`): all worker→core RPCs serialise
-through the backend thread via `BlockingQueuedConnection` (upstream
-SDK isn't reentrant); pending-row dedup uses a `(timestamp, geohash)`
-tuple fallback; centroid-rebuild coalesced behind a 0 ms Timer
-(was O(N²)); `loadLocalPhotoUrl` has a 200 MB size cap + 1 GB LRU
-cache eviction; storage download writes to per-attempt unique paths
-to dodge the local-vs-network race; CI now runs `lm metadata` +
-`lm methods` against the UI plugin .so too.
+Post-review hardening (`34f3d06`): pending-row dedup uses a
+`(timestamp, geohash)` tuple fallback; centroid-rebuild coalesced
+behind a 0 ms Timer (was O(N²)); `loadLocalPhotoUrl` has a 200 MB
+size cap + 1 GB LRU cache eviction; storage download writes to
+per-attempt unique paths to dodge the local-vs-network race; CI now
+runs `lm metadata` + `lm methods` against the UI plugin .so too.
+
+> Superseded: `34f3d06` originally serialised worker→core RPCs
+> through a backend thread via `BlockingQueuedConnection`. That whole
+> worker-thread/`QThreadPool` layer was removed in the upstream-feedback
+> alignment (logos-basecamp#150): the SDK's `LogosAPIClient` is
+> single-threaded, so the backend now calls core directly on its own
+> ui-host thread — no threads, no `BlockingQueuedConnection`. See the
+> Phase A/B notes in `.claude/plans/`.
 
 CLAUDE.md captures the **rule**: never run `logos.callModule(...)`
 on the QML render path — basecamp's bridge is sync-only.

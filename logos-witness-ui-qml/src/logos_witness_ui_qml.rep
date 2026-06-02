@@ -7,10 +7,12 @@
 //     promise-style result/error.
 //   - listens to SIGNALs with the usual `onFooBar:` handler shape.
 //
-// Async pattern (submit, fetch): caller fires the SLOT, the backend
-// runs the blocking core call on a worker thread, then emits a paired
-// completion SIGNAL. This means no `logos.callModule(...)` call on the
-// QML render thread.
+// Async pattern (submit, fetch): caller fires the SLOT; the backend
+// calls core on its own (ui-host) thread and emits a paired completion
+// SIGNAL. No worker threads — the SDK's LogosAPIClient is
+// single-threaded, so the call stays on the thread that owns it. The
+// point is that the QML render thread never makes the call itself, so
+// paint is never blocked on a `logos.callModule(...)`.
 class LogosWitnessUiQml
 {
     // Auto-syncing snapshot of the timeline. Each entry is a
@@ -40,11 +42,10 @@ class LogosWitnessUiQml
     // delay any backend-dependent UI until the replica is live.
     PROP(QString backendStatus="initializing" READONLY)
 
-    // Fire-and-forget submit. Backend posts onto QThreadPool, calls
-    // core's submitPhoto (blocking — strip → storage upload → delivery
-    // publish), then emits submitDone on the QtRO thread.
-    // localId is an opaque echo (anything the caller picks) so QML
-    // can match completion to the optimistic row it inserted.
+    // Fire-and-forget submit. Backend calls core's submitPhoto
+    // (strip → storage upload → delivery publish), then emits
+    // submitDone. localId is an opaque echo (anything the caller picks)
+    // so QML can match completion to the optimistic row it inserted.
     SLOT(void submitPhotoAsync(QString localId, QString filePath, QString timestamp, QString geohash))
 
     // Fire-and-forget photo fetch. Same shape; bytes come back via
