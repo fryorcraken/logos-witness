@@ -11,28 +11,25 @@ pin = "ed3bbedb4b684645da05455d30a4a0be7cc4dfe0"
 
 [repos.basecamp]
 source = "https://github.com/logos-co/logos-basecamp"
-# Pre-release tag `pre-release-b44a5cf-260` (2026-05-08).
+# Tag `0.1.2` (= `tutorial-v2`, sha `2576ef8f`). This is the version
+# dlipicar (upstream) supports and asked us to retry on across
+# logos-basecamp#150 / #169 / #176, so we run the whole stack on it.
 #
-# Why not the newest tagged RC (`0.1.2-RC2`, 2026-05-01)?
-# RC2 bundles `logos-package-manager` (lgpm) at commit `8110734` —
-# the commit that *introduced* package validation in PR #8 ("Add
-# package signature and validation"). That initial implementation
-# requires every variant in a module's `manifest.json` to carry a
-# non-empty `main` entry. Our `logos_witness_ui_qml` module is
-# QML-only (`view: qml/Main.qml`, no native plugin), so its
-# `main: {}` block triggers `Variant 'linux-amd64-dev' has no main
-# entry` on install. The very next lgpm commit, `865fc5a` (PR #9,
-# "feat: add support for new ui-qml type and handle that it needs
-# view but main is optional for backend"), relaxes the rule. We
-# need a basecamp pin that bundles lgpm PR #9 or later — and
-# pre-release-b44a5cf-260 is the first to do so. Confirmed by
-# probe: RC2 + lgpm 8110734 fails our UI module install with the
-# above literal error; pre-release-b44a5cf-260 + lgpm 9101875b
-# installs cleanly.
+# It also bundles lgpm at or past PR #9 (`865fc5a`), which fixes the
+# QML-only-module install error we hit on the older `0.1.2-RC2`
+# (lgpm `8110734`): RC2 required every `manifest.json` variant to
+# carry a non-empty `main`, but our `logos_witness_ui_qml` module is
+# QML-only (`view: qml/Main.qml`, no native plugin) with `main: {}`,
+# tripping `Variant 'linux-amd64-dev' has no main entry`. 0.1.2's
+# lgpm makes `main` optional for the `ui-qml` type.
 #
-# Also matches the qtdeclarative-6.9.2 ABI of the QtLocation we
+# Module-builder must match: both module flakes pin
+# logos-module-builder@tutorial-v2 (see logos-witness-core/flake.nix)
+# so the generated accessors line up with this basecamp's SDK.
+#
+# Still matches the qtdeclarative-6.9.2 ABI of the QtLocation we
 # vendor under logos-witness-ui-qml/qml/.
-pin = "b44a5cf4787fc3a5c08e157227e791aee4d48064"
+pin = "2576ef8f8fbdc1ff15c973eb741a7789e7297cc8"
 build = "nix-flake"
 attr = "app"
 
